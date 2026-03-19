@@ -58,6 +58,11 @@ material {
         },
         {
             type : float,
+            name : worldUnitScale,
+            precision: high
+        },
+        {
+            type : float,
             name : ior,
             precision: high
         },
@@ -191,13 +196,14 @@ fragment {
         float centerThickness = saturate(centerNormalData.a);
         vec3 centerTint = saturate(centerParamsData.rgb * materialParams.subsurfaceColor);
         float sd = max(centerParamsData.a * materialParams.scatteringDistance, 0.001);
+        float scaledSd = sd * materialParams.worldUnitScale;
         float s = 1.0 / sd;
 
         // Use the per-pixel scattering radius and keep view options as a global multiplier.
         float pixelScale = materialParams.projectedScale / centerDepth;
-        float effectiveRadiusPixels = max(sd * pixelScale * 0.5, 1.0);
+        float effectiveRadiusPixels = max(scaledSd * pixelScale * 0.5, 1.0);
 
-        float depthThreshold = sd * 2.0;
+        float depthThreshold = scaledSd * 2.0;
 
         // Accumulate diffuse-only blur with single Burley kernel
         vec3 totalDiffuse = centerDiffuse;
@@ -266,7 +272,7 @@ fragment {
             return;
         }
 
-        float scatterAmount = smoothstep(0.01, 0.35, sd) * centerMask;
+        float scatterAmount = smoothstep(0.01, 0.35, scaledSd) * centerMask;
         float faceBoost = smoothstep(0.22, 0.88, NoV);
         float bandStrength = scatterAmount * mix(0.75, 1.10, faceBoost);
         vec3 lowFrequencyDiffuse = blurredDiffuse;
@@ -334,7 +340,7 @@ fragment {
         float backlight = smoothstep(0.08, 0.7, -rawNoL);
         float thinRegion = 1.0 - centerThickness;
         float transmissionStrength = backlight * silhouette * thinRegion * centerMask;
-        transmissionStrength *= smoothstep(0.05, 0.35, sd);
+        transmissionStrength *= smoothstep(0.05, 0.35, scaledSd);
         transmissionStrength *= 0.35 + 0.65 * (1.0 - edgeAttenuation);
         // Approximate the stronger internal bending from higher-IOR media until the
         // transmission path carries a richer profile payload.

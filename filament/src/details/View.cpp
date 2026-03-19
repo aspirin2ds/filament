@@ -1458,6 +1458,7 @@ void FView::setScreenSpaceReflectionsOptions(ScreenSpaceReflectionsOptions optio
 
 void FView::setSubsurfaceScatteringOptions(SubsurfaceScatteringOptions options) noexcept {
     options.sampleCount = std::max(uint8_t(3), std::min(uint8_t(25), options.sampleCount));
+    options.worldUnitScale = std::max(0.001f, options.worldUnitScale);
     options.ior = std::max(1.0f, options.ior);
     mSubsurfaceScatteringOptions = options;
 }

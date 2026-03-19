@@ -30,7 +30,7 @@ Postprocess performs a 2-pass separable blur over the diffuse SSS buffer using:
 - normal rejection
 - per-pixel tint from `sssParams.rgb`
 - per-pixel scattering distance from `sssParams.a`
-- view-level `scatteringDistance`, `subsurfaceColor`, and now `ior`
+- view-level `scatteringDistance`, `subsurfaceColor`, `worldUnitScale`, and `ior`
 
 References:
 
@@ -45,10 +45,11 @@ The recombine pass currently:
 - reconstructs a specular estimate with `centerColor - centerSetupDiffuse`
 - derives diffuse lighting by dividing setup diffuse by stored albedo
 - blurs in lighting space and reapplies albedo at the end
-- still computes a heuristic tinted diffuse influence mask
-- still applies a warm-tint remap in lighting space
+- blends blurred vs unblurred lighting with a `FadedTint`-style weight derived from current
+  runtime heuristics
 - adds a separate thin-region transmission term
-- now scales that transmission term using view-level `ior`
+- scales the blur calibration with view-level `worldUnitScale`
+- scales the transmission term using view-level `ior`
 
 References:
 
@@ -85,10 +86,23 @@ References:
     [View.cpp](/Users/aspirin2ds/Workspace/github/filament/filament/src/details/View.cpp#L1454)
     [PostProcessManager.cpp](/Users/aspirin2ds/Workspace/github/filament/filament/src/PostProcessManager.cpp#L1238)
     [sssBlur.mat](/Users/aspirin2ds/Workspace/github/filament/filament/src/materials/sss/sssBlur.mat#L321)
+- `worldUnitScale` is now live at runtime.
+  - It is part of `SubsurfaceScatteringOptions`.
+  - It is clamped in `FView`.
+  - It is forwarded through `PostProcessManager`.
+  - It scales blur radius and related thresholds in `sssBlur.mat`.
+  - It is exposed in the sample debug UI.
+  - References:
+    [Options.h](/Users/aspirin2ds/Workspace/github/filament/filament/include/filament/Options.h#L823)
+    [View.cpp](/Users/aspirin2ds/Workspace/github/filament/filament/src/details/View.cpp#L1454)
+    [PostProcessManager.cpp](/Users/aspirin2ds/Workspace/github/filament/filament/src/PostProcessManager.cpp#L1240)
+    [sssBlur.mat](/Users/aspirin2ds/Workspace/github/filament/filament/src/materials/sss/sssBlur.mat#L199)
+    [sample_sss_burley.cpp](/Users/aspirin2ds/Workspace/github/filament/samples/sample_sss_burley.cpp#L968)
 - The sample UI is now intentionally smaller.
   - Marble is the default preset.
   - `Scattering Distance` defaults to `0.5`.
   - `IOR` defaults to `1.0` in the Marble preset and is exposed directly in the SSS panel.
+  - `World Unit Scale` is exposed directly in the SSS panel.
   - References:
     [sample_sss_burley.cpp](/Users/aspirin2ds/Workspace/github/filament/samples/sample_sss_burley.cpp#L174)
     [sample_sss_burley.cpp](/Users/aspirin2ds/Workspace/github/filament/samples/sample_sss_burley.cpp#L219)
@@ -96,12 +110,12 @@ References:
 
 ## Biggest Remaining Gaps
 
-1. No explicit `WorldUnitScale` or richer mean-free-path payload.
+1. No richer mean-free-path / Burley profile payload.
    - Unreal derives Burley scale from profile data including `SurfaceAlbedo`,
      `DiffuseMeanFreePath`, and `WorldUnitScale`.
-   - Current Filament now carries albedo, but it still only carries tint and scattering distance
-     for Burley-specific profile behavior.
-   - The blur radius is therefore simpler and less profile-faithful.
+   - Current Filament now has runtime `worldUnitScale`, but it still only carries tint and
+     scattering distance in the per-pixel SSS payload.
+   - The blur radius and energy weighting are therefore still simpler and less profile-faithful.
    - References:
      [PostProcessSubsurfaceCommon.ush](/Users/aspirin2ds/Workspace/github/filament/../UnrealEngine/Engine/Shaders/Private/PostProcessSubsurfaceCommon.ush#L89)
      [sssBlur.mat](/Users/aspirin2ds/Workspace/github/filament/filament/src/materials/sss/sssBlur.mat#L170)
@@ -113,10 +127,10 @@ References:
    - Reference:
      [SeparableSSS.ush](/Users/aspirin2ds/Workspace/github/filament/../UnrealEngine/Engine/Shaders/Private/SeparableSSS.ush#L158)
 
-3. Recombine is still heuristic rather than profile-driven.
-   - Current Filament uses `terminatorAnchor`, `shadowSupport`, `backscatterSupport`, and
-     `warmTint` heuristics.
-   - Unreal's recombine logic is more explicitly tied to profile tint and weighting terms.
+3. Recombine weight is still heuristic rather than profile-driven.
+   - Current Filament now uses a more Unreal-like `FadedTint` blend shape.
+   - However, the scalar weight still comes from `terminatorAnchor`, `shadowSupport`,
+     `backscatterSupport`, and similar local heuristics instead of full Burley/profile terms.
    - Reference:
      [sssBlur.mat](/Users/aspirin2ds/Workspace/github/filament/filament/src/materials/sss/sssBlur.mat#L264)
 
@@ -146,12 +160,12 @@ References:
 
 The next highest-value step to shrink the gap is:
 
-1. Add explicit Burley profile-scale data to the payload.
+1. Add richer Burley profile-scale data to the payload.
 2. Replace the current radius and weighting heuristics with scaling closer to Unreal's Burley
    model:
-   - incorporate world-unit scale explicitly
    - separate mean-free-path / profile scaling from simple tint
-   - reduce reliance on the warm-tint heuristic during recombine
+   - use `SurfaceAlbedo`-dependent Burley scaling more directly
+   - reduce reliance on local terminator/support heuristics for the scalar `LerpFactor`
 
 This is the best next move because it unlocks multiple parity improvements at once:
 
@@ -172,9 +186,10 @@ complexity without addressing the more visible single-material mismatch.
 ## Concrete Follow-Up Order
 
 1. Add explicit Burley scale inputs such as world-unit scale to the payload.
-2. Tighten kernel scaling and recombine weighting against Unreal's Burley math.
-3. Re-evaluate whether the remaining error is mostly from profile scaling math or from mixed-profile
+2. Add or derive richer per-pixel Burley scale inputs beyond tint + distance.
+3. Tighten kernel scaling and recombine weighting against Unreal's Burley math.
+4. Re-evaluate whether the remaining error is mostly from profile scaling math or from mixed-profile
    separation.
-4. If mixed-profile separation is then visibly wrong, add profile identity or a profile-compatible
+5. If mixed-profile separation is then visibly wrong, add profile identity or a profile-compatible
    mask next.
-5. After that, revisit richer transmission payload and dual specular.
+6. After that, revisit richer transmission payload and dual specular.

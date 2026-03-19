@@ -817,6 +817,12 @@ struct SubsurfaceScatteringOptions {
     math::float3 subsurfaceColor = { 0.8f, 0.3f, 0.2f };
 
     /**
+     * Global world-unit scale applied to the SSS radius calibration.
+     * Values must be greater than 0.
+     */
+    float worldUnitScale = 1.0f;
+
+    /**
      * Index of refraction used by the SSS transmission approximation.
      * Values must be greater than or equal to 1.0.
      */

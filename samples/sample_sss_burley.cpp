@@ -708,6 +708,7 @@ void applyViewOptions(App& app) {
     sssOptions.sampleCount = uint8_t(app.sssSampleCount);
     sssOptions.scatteringDistance = app.scatteringDistance;
     sssOptions.subsurfaceColor = app.subsurfaceColor;
+    sssOptions.worldUnitScale = app.worldUnitScale;
     sssOptions.ior = app.ior;
     sssOptions.debugMode = toSssDebugMode(app.debugView);
     app.mainView->setSubsurfaceScatteringOptions(sssOptions);
@@ -964,6 +965,7 @@ int main(int argc, char** argv) {
             ImGui::SliderFloat("Scattering Distance", &app.scatteringDistance, 0.0f, 1.0f,
                     "%.4f");
             ImGui::ColorEdit3("Subsurface Color", &app.subsurfaceColor.x);
+            ImGui::SliderFloat("World Unit Scale", &app.worldUnitScale, 0.1f, 4.0f, "%.3f");
             ImGui::SliderFloat("IOR", &app.ior, 1.0f, 3.0f);
         }
 
