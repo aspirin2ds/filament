@@ -216,6 +216,8 @@ constexpr std::array<BurleyPreset, 4> PRESETS = {{
     }
 }};
 
+constexpr int DEFAULT_PRESET_INDEX = 2;
+
 struct ComparisonViewpoint {
     const char* name;
     const char* slug;
@@ -439,7 +441,7 @@ struct App {
     std::string comparisonOutputDir;
     std::string gitCommit;
 
-    int presetIndex = 0;
+    int presetIndex = DEFAULT_PRESET_INDEX;
     int viewpointIndex = 0;
     int restoreViewpointIndex = 0;
     DebugView restoreDebugView = DebugView::FINAL;
@@ -932,13 +934,13 @@ int main(int argc, char** argv) {
         ImGui::Begin("SSS Burley Parameters");
 
         if (ImGui::CollapsingHeader("Canonical Comparison", ImGuiTreeNodeFlags_DefaultOpen)) {
-            for (size_t i = 0; i < PRESETS.size(); i++) {
-                bool selected = int(i) == app.presetIndex;
-                if (ImGui::RadioButton(PRESETS[i].name, selected)) {
-                    app.presetIndex = int(i);
-                    applyPreset(app, PRESETS[i]);
-                }
+            if (app.presetIndex != DEFAULT_PRESET_INDEX) {
+                app.presetIndex = DEFAULT_PRESET_INDEX;
             }
+            if (ImGui::Button("Reset to Marble Defaults")) {
+                applyPreset(app, PRESETS[DEFAULT_PRESET_INDEX]);
+            }
+            ImGui::TextUnformatted("Default preset: Marble");
 
             if (ImGui::Button("Capture Comparison Set")) {
                 app.comparisonCaptureRequested = true;
@@ -961,26 +963,6 @@ int main(int argc, char** argv) {
             ImGui::SliderFloat("Scattering Distance", &app.scatteringDistance, 0.001f, 0.5f,
                     "%.4f");
             ImGui::ColorEdit3("Subsurface Color", &app.subsurfaceColor.x);
-        }
-
-        if (ImGui::CollapsingHeader("Unreal Reference Values")) {
-            ImGui::ColorEdit3("Mean Free Path Color", &app.meanFreePathColor.x);
-            ImGui::SliderFloat("Mean Free Path Distance", &app.meanFreePathDistance, 0.01f, 1.0f);
-            ImGui::SliderFloat("World Unit Scale", &app.worldUnitScale, 0.01f, 1.0f);
-            ImGui::ColorEdit3("Tint", &app.tint.x);
-            ImGui::ColorEdit3("Boundary Color Bleed", &app.boundaryColorBleed.x);
-            ImGui::SliderFloat("Extinction Scale", &app.extinctionScale, 0.01f, 5.0f);
-            ImGui::SliderFloat("Normal Scale", &app.normalScale, 0.01f, 1.0f);
-            ImGui::SliderFloat("Scattering Distribution", &app.scatteringDistribution, 0.01f, 1.0f);
-            ImGui::SliderFloat("IOR", &app.ior, 1.0f, 3.0f);
-            ImGui::SliderFloat("Dual Roughness 0", &app.roughness0, 0.5f, 2.0f);
-            ImGui::SliderFloat("Dual Roughness 1", &app.roughness1, 0.5f, 2.0f);
-            ImGui::SliderFloat("Lobe Mix", &app.lobeMix, 0.1f, 0.9f);
-            ImGui::ColorEdit3("Transmission Tint", &app.transmissionTintColor.x);
-            if (ImGui::Button("Map MFP -> Current Filament Params")) {
-                app.subsurfaceColor = app.meanFreePathColor;
-                app.scatteringDistance = app.meanFreePathDistance * app.worldUnitScale;
-            }
         }
 
         if (ImGui::CollapsingHeader("Emissive")) {
