@@ -7,6 +7,8 @@ layout(location = 0) out vec4 fragColor;
 #if defined(SHADING_MODEL_SUBSURFACE_BURLEY)
 #if __VERSION__ != 100
 layout(location = 1) out vec4 fragColor1;
+layout(location = 2) out vec4 fragColor2;
+layout(location = 3) out vec4 fragColor3;
 #endif
 #endif
 
@@ -65,10 +67,16 @@ void main() {
     fragColor = evaluateMaterial(inputs);
 
 #if defined(SHADING_MODEL_SUBSURFACE_BURLEY)
+    highp vec3 shadingViewNormal = normalize(
+            (getViewFromWorldMatrix() * vec4(shading_normal, 0.0)).xyz);
 #if __VERSION__ == 100
     gl_FragData[1] = vec4(g_sssDiffuse, saturate(g_sssMask));
+    gl_FragData[2] = vec4(shadingViewNormal, saturate(inputs.thickness));
+    gl_FragData[3] = vec4(saturate(inputs.subsurfaceColor), max(inputs.scatteringDistance, 0.0));
 #else
     fragColor1 = vec4(g_sssDiffuse, saturate(g_sssMask));
+    fragColor2 = vec4(shadingViewNormal, saturate(inputs.thickness));
+    fragColor3 = vec4(saturate(inputs.subsurfaceColor), max(inputs.scatteringDistance, 0.0));
 #endif
 #endif
 

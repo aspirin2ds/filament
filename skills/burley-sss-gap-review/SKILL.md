@@ -21,9 +21,10 @@ Before calling something a gap, anchor yourself in the current Filament implemen
 - `SUBSURFACE_BURLEY` is a real material shading model.
 - The color pass writes an auxiliary SSS MRT:
   `vec4(g_sssDiffuse, g_sssMask)`.
+- The color pass also writes a stored shaded-normal SSS target for the blur path.
 - The renderer allocates that auxiliary target only when SSS is enabled.
 - Post-process applies a two-pass separable Burley blur.
-- The blur is depth-aware and also uses normals reconstructed from depth.
+- The blur is depth-aware and uses the stored shaded normal buffer.
 - The final recombine preserves specular by reconstructing it from:
   `centerColor - centerSetupDiffuse`.
 - The sample already exposes a deterministic debug / comparison harness.
@@ -80,15 +81,15 @@ Use this exact mental model when reviewing gaps:
 
 1. Material shading marks Burley pixels and accumulates scatterable diffuse into:
    `g_sssDiffuse`, `g_sssMask`
-2. `surface_main.fs` writes that data to a second MRT
-3. `RendererUtils.cpp` allocates the `RGBA16F` SSS diffuse buffer when SSS is enabled
+2. `surface_main.fs` writes diffuse/mask plus a stored view-normal target
+3. `RendererUtils.cpp` allocates the `RGBA16F` SSS diffuse and normal buffers when SSS is enabled
 4. `Renderer.cpp` forces the main HDR color buffer to RGBA when Burley SSS is active
 5. `PostProcessManager.cpp` runs horizontal then vertical blur
 6. `sssBlur.mat`:
    - reads main color
    - reads SSS diffuse/setup buffer
+   - reads stored SSS normals
    - reads depth
-   - reconstructs normals from depth
    - computes a scalar Burley kernel from view-global parameters
    - recombines blurred diffuse with preserved specular
 7. `sample_sss_burley.cpp` drives comparison presets, debug views, metadata dumps, and capture reports
@@ -302,13 +303,13 @@ Primary bucket:
 
 - missing feature
 
-### F. Normals are reconstructed from depth
+### F. Normals come from a stored SSS normal buffer
 
 Current Filament state:
 
-- blur uses estimated normals from depth reconstruction
-- this is a real implementation, not a placeholder
-- it is still weaker than having a dedicated stored normal source
+- blur uses the stored shaded normal buffer
+- weighting and recombine now follow the same normal-map detail as the material shading path
+- validation should focus on thin detail and grazing-angle behavior
 
 Primary bucket:
 

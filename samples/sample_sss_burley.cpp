@@ -142,7 +142,7 @@ constexpr std::array<BurleyPreset, 4> PRESETS = {{
         0.5f,
         { 1.0f, 0.530583f, 0.526042f },
         0.15f,
-        0.1f,
+        1.0f,
         { 1.0f, 1.0f, 1.0f },
         { 1.0f, 1.0f, 1.0f },
         1.0f,
@@ -323,10 +323,10 @@ constexpr std::array<GapRow, 16> GAP_ROWS = {{
     {
         "bilateral normal rejection",
         "Normals are used to reject taps across sharp shading changes.",
-        "Implemented with normals reconstructed from depth.",
-        "Works for broad surfaces but can wobble on thin or noisy geometry.",
-        "No dedicated normal source is bound into the SSS pass yet.",
-        "Promote this to a stored normal input for shipping parity."
+        "Implemented with the stored shaded normal buffer.",
+        "SSS weighting now follows the same normal-map detail as the material shading path.",
+        "A dedicated SSS normal target is carried from the color pass into blur and recombine.",
+        "Validate the stored-normal path on thin detail and grazing angles."
     },
     {
         "recombine formula",
@@ -395,7 +395,6 @@ constexpr std::array<GapRow, 16> GAP_ROWS = {{
 }};
 
 struct CaptureTask {
-    size_t viewpointIndex;
     DebugView debugView;
     const char* artifactName;
     const char* artifactSlug;
@@ -416,13 +415,13 @@ struct App {
     float metallic = 0.0f;
     float reflectance = 0.5f;
     float thickness = 0.5f;
-    float scatteringDistance = 0.01f;
+    float scatteringDistance = 0.15f;
     float3 subsurfaceColor = { 0.8f, 0.2f, 0.1f };
     float4 emissive = { 0.0f, 0.0f, 0.0f, 0.0f };
 
     float3 meanFreePathColor = { 1.0f, 0.530583f, 0.526042f };
     float meanFreePathDistance = 0.15f;
-    float worldUnitScale = 0.1f;
+    float worldUnitScale = 1.0f;
     float3 tint = { 1.0f, 1.0f, 1.0f };
     float3 boundaryColorBleed = { 1.0f, 1.0f, 1.0f };
     float extinctionScale = 1.0f;
@@ -439,6 +438,7 @@ struct App {
     DebugView debugView = DebugView::FINAL;
 
     bool screenshotRequested = false;
+    bool screenshotCaptureArmed = false;
     bool comparisonCaptureRequested = false;
     bool comparisonCaptureActive = false;
     size_t comparisonCaptureIndex = 0;
@@ -653,13 +653,12 @@ void writeComparisonReport(App const& app) {
 
     out << "## Artifact Grid\n\n";
     out << "Capture filenames are deterministic and overwrite previous runs for the same preset.\n\n";
-    for (auto const& viewpoint : COMPARISON_VIEWPOINTS) {
-        out << "### " << viewpoint.name << "\n\n";
-        for (auto const& artifact : COMPARISON_ARTIFACTS) {
-            out << "- `" << viewpoint.slug << "_" << artifact.slug << ".png`\n";
-        }
-        out << "\n";
+    auto const& viewpoint = COMPARISON_VIEWPOINTS[size_t(app.viewpointIndex)];
+    out << "Current viewpoint: `" << viewpoint.slug << "`\n\n";
+    for (auto const& artifact : COMPARISON_ARTIFACTS) {
+        out << "- `" << artifact.slug << ".png`\n";
     }
+    out << "\n";
 
     out << "## Gap Matrix\n\n";
     out << "| Behavior | Unreal reference | Current Filament | Visible symptom | Root cause guess | Fix required |\n";
@@ -802,15 +801,12 @@ void configureComparisonView(View* view) {
 
 void queueComparisonCapture(App& app) {
     app.comparisonCaptureTasks.clear();
-    for (size_t viewpointIndex = 0; viewpointIndex < COMPARISON_VIEWPOINTS.size(); viewpointIndex++) {
-        for (auto const& artifact : COMPARISON_ARTIFACTS) {
-            app.comparisonCaptureTasks.push_back({
-                viewpointIndex,
-                artifact.debugView,
-                artifact.name,
-                artifact.slug
-            });
-        }
+    for (auto const& artifact : COMPARISON_ARTIFACTS) {
+        app.comparisonCaptureTasks.push_back({
+            artifact.debugView,
+            artifact.name,
+            artifact.slug
+        });
     }
 }
 
@@ -829,7 +825,6 @@ void beginComparisonCapture(App& app) {
     app.comparisonCaptureActive = !app.comparisonCaptureTasks.empty();
     if (app.comparisonCaptureActive) {
         app.debugView = app.comparisonCaptureTasks.front().debugView;
-        app.viewpointIndex = int(app.comparisonCaptureTasks.front().viewpointIndex);
         writeComparisonMetadata(app, app.mainView);
         writeComparisonReport(app);
         std::cout << "Starting Burley comparison capture in: " << app.comparisonOutputDir
@@ -955,6 +950,10 @@ int main(int argc, char** argv) {
     };
 
     FilamentApp::get().animate([&app](Engine* engine, View*, double) {
+        if (app.screenshotRequested) {
+            app.screenshotRequested = false;
+            app.screenshotCaptureArmed = true;
+        }
         if (app.comparisonCaptureRequested) {
             app.comparisonCaptureRequested = false;
             beginComparisonCapture(app);
@@ -963,6 +962,11 @@ int main(int argc, char** argv) {
     });
 
     auto imgui = [&app](Engine* engine, View*) {
+        if (app.screenshotCaptureArmed || app.comparisonCaptureActive) {
+            syncSceneState(app, engine);
+            return;
+        }
+
         ImGui::SetNextWindowSize(ImVec2(420, 0), ImGuiCond_Once);
         ImGui::Begin("SSS Burley Parameters");
 
@@ -1068,7 +1072,7 @@ int main(int argc, char** argv) {
     auto postRender = [&app](Engine*, View* view, Scene*, Renderer* renderer) {
         auto scheduleReadback = [&](std::string path, std::string label) {
             const Viewport& vp = view->getViewport();
-            uint8_t* pixels = new uint8_t[vp.width * vp.height * 3];
+            uint8_t* pixels = new uint8_t[vp.width * vp.height * 4];
 
             struct CaptureState {
                 View* view;
@@ -1076,15 +1080,15 @@ int main(int argc, char** argv) {
                 std::string label;
             };
 
-            backend::PixelBufferDescriptor buffer(pixels, vp.width * vp.height * 3,
-                    backend::PixelBufferDescriptor::PixelDataFormat::RGB,
+            backend::PixelBufferDescriptor buffer(pixels, vp.width * vp.height * 4,
+                    backend::PixelBufferDescriptor::PixelDataFormat::RGBA,
                     backend::PixelBufferDescriptor::PixelDataType::UBYTE,
                     [](void* buffer, size_t, void* user) {
                         auto* state = static_cast<CaptureState*>(user);
                         const Viewport& viewport = state->view->getViewport();
 
-                        LinearImage image(toLinear<uint8_t>(viewport.width, viewport.height,
-                                viewport.width * 3, static_cast<uint8_t*>(buffer)));
+                        LinearImage image(toLinearWithAlpha<uint8_t>(viewport.width, viewport.height,
+                                viewport.width * 4, static_cast<uint8_t*>(buffer)));
 
                         std::ofstream output(state->path,
                                 std::ios::binary | std::ios::trunc);
@@ -1102,24 +1106,21 @@ int main(int argc, char** argv) {
                     uint32_t(vp.left), uint32_t(vp.bottom), vp.width, vp.height, std::move(buffer));
         };
 
-        if (app.screenshotRequested) {
-            app.screenshotRequested = false;
+        if (app.screenshotCaptureArmed) {
+            app.screenshotCaptureArmed = false;
             scheduleReadback("sss_burley_manual.png", "manual screenshot");
         }
 
         if (app.comparisonCaptureActive && app.comparisonCaptureIndex < app.comparisonCaptureTasks.size()) {
             auto const& task = app.comparisonCaptureTasks[app.comparisonCaptureIndex];
-            auto const& viewpoint = COMPARISON_VIEWPOINTS[task.viewpointIndex];
-            std::string path = app.comparisonOutputDir + "/" + viewpoint.slug + "_" +
-                    task.artifactSlug + ".png";
-            std::string label = std::string(viewpoint.name) + " / " + task.artifactName;
+            std::string path = app.comparisonOutputDir + "/" + task.artifactSlug + ".png";
+            std::string label = std::string(task.artifactName);
             scheduleReadback(path, label);
 
             app.comparisonCaptureIndex++;
             if (app.comparisonCaptureIndex < app.comparisonCaptureTasks.size()) {
                 auto const& nextTask = app.comparisonCaptureTasks[app.comparisonCaptureIndex];
                 app.debugView = nextTask.debugView;
-                app.viewpointIndex = int(nextTask.viewpointIndex);
             } else {
                 finishComparisonCapture(app);
             }

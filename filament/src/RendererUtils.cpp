@@ -72,6 +72,8 @@ RendererUtils::ColorPassOutput RendererUtils::colorPass(
         FrameGraphId<FrameGraphTexture> ssr;    // either screen-space reflections or refractions
         FrameGraphId<FrameGraphTexture> structure;
         FrameGraphId<FrameGraphTexture> sssDiffuse;
+        FrameGraphId<FrameGraphTexture> sssNormal;
+        FrameGraphId<FrameGraphTexture> sssParams;
     };
 
     auto& colorPass = fg.addPass<ColorPassData>(name,
@@ -86,6 +88,8 @@ RendererUtils::ColorPassOutput RendererUtils::colorPass(
                 data.shadows = colorPassInput.shadows;
                 data.ssao = colorPassInput.ssao;
                 data.sssDiffuse = colorPassInput.sssDiffuse;
+                data.sssNormal = colorPassInput.sssNormal;
+                data.sssParams = colorPassInput.sssParams;
 
                 // Screen-space reflection or refractions
                 if (config.hasScreenSpaceReflectionsOrRefractions) {
@@ -115,6 +119,26 @@ RendererUtils::ColorPassOutput RendererUtils::colorPass(
 
                 if (config.hasSubsurfaceScattering && !data.sssDiffuse) {
                     data.sssDiffuse = builder.createTexture("SSS Diffuse Buffer", {
+                            .width = colorBufferDesc.width,
+                            .height = colorBufferDesc.height,
+                            .depth = colorBufferDesc.depth,
+                            .samples = colorBufferDesc.samples,
+                            .type = colorBufferDesc.type,
+                            .format = TextureFormat::RGBA16F
+                    });
+                }
+                if (config.hasSubsurfaceScattering && !data.sssNormal) {
+                    data.sssNormal = builder.createTexture("SSS Normal Buffer", {
+                            .width = colorBufferDesc.width,
+                            .height = colorBufferDesc.height,
+                            .depth = colorBufferDesc.depth,
+                            .samples = colorBufferDesc.samples,
+                            .type = colorBufferDesc.type,
+                            .format = TextureFormat::RGBA16F
+                    });
+                }
+                if (config.hasSubsurfaceScattering && !data.sssParams) {
+                    data.sssParams = builder.createTexture("SSS Params Buffer", {
                             .width = colorBufferDesc.width,
                             .height = colorBufferDesc.height,
                             .depth = colorBufferDesc.depth,
@@ -195,11 +219,27 @@ RendererUtils::ColorPassOutput RendererUtils::colorPass(
                     data.sssDiffuse = builder.read(data.sssDiffuse,
                             FrameGraphTexture::Usage::COLOR_ATTACHMENT);
                 }
+                if (data.sssNormal) {
+                    data.sssNormal = builder.read(data.sssNormal,
+                            FrameGraphTexture::Usage::COLOR_ATTACHMENT);
+                }
+                if (data.sssParams) {
+                    data.sssParams = builder.read(data.sssParams,
+                            FrameGraphTexture::Usage::COLOR_ATTACHMENT);
+                }
 
                 data.color = builder.write(data.color, FrameGraphTexture::Usage::COLOR_ATTACHMENT);
                 data.depth = builder.write(data.depth, depthStencilUsage);
                 if (data.sssDiffuse) {
                     data.sssDiffuse = builder.write(data.sssDiffuse,
+                            FrameGraphTexture::Usage::COLOR_ATTACHMENT);
+                }
+                if (data.sssNormal) {
+                    data.sssNormal = builder.write(data.sssNormal,
+                            FrameGraphTexture::Usage::COLOR_ATTACHMENT);
+                }
+                if (data.sssParams) {
+                    data.sssParams = builder.write(data.sssParams,
                             FrameGraphTexture::Usage::COLOR_ATTACHMENT);
                 }
 
@@ -218,7 +258,9 @@ RendererUtils::ColorPassOutput RendererUtils::colorPass(
                  * is initialized in this file).
                  */
                 builder.declareRenderPass("Color Pass Target", {
-                        .attachments = { .color = { data.color, data.sssDiffuse, data.output },
+                        .attachments = { .color = {
+                                data.color, data.sssDiffuse, data.sssNormal, data.sssParams,
+                                data.output },
                         .depth = data.depth,
                         .stencil = data.stencil },
                         .clearColor = config.clearColor,
@@ -307,7 +349,9 @@ RendererUtils::ColorPassOutput RendererUtils::colorPass(
             .linearColor = colorPass->color,
             .tonemappedColor = colorPass->output,   // can be null
             .depth = colorPass->depth,
-            .sssDiffuse = colorPass->sssDiffuse
+            .sssDiffuse = colorPass->sssDiffuse,
+            .sssNormal = colorPass->sssNormal,
+            .sssParams = colorPass->sssParams
     };
 }
 

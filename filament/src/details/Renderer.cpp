@@ -1381,7 +1381,8 @@ void FRenderer::renderJob(DriverApi& driver, RootArenaScope& rootArenaScope, FVi
     // Applied before TAA so the stochastic noise can be resolved by the temporal filter.
     if (sssOptions.enabled) {
         input = ppm.subsurfaceScatteringBlur(
-                fg, input, colorPassOutput.sssDiffuse, depth, cameraInfo, sssOptions);
+                fg, input, colorPassOutput.sssDiffuse, colorPassOutput.sssNormal,
+                depth, cameraInfo, sssOptions);
     }
 
     // TODO: DoF should be applied here, before TAA -- but if we do this it'll result in a lot of

@@ -2,7 +2,7 @@
 
 This capture set is the Filament side of the repeatable Unreal-vs-Filament Burley comparison workflow.
 
-- Engine commit: `3ebb2086e`
+- Engine commit: `ca4ed0859`
 - Preset: `Unreal Burley Reference`
 - Metadata: [`metadata.json`](./metadata.json)
 - Baseline render settings: direct light only, fixed viewpoints, TAA disabled, bloom disabled, DOF disabled, SSR disabled
@@ -24,53 +24,17 @@ This capture set is the Filament side of the repeatable Unreal-vs-Filament Burle
 
 Capture filenames are deterministic and overwrite previous runs for the same preset.
 
-### Front Lit
+Current viewpoint: `front_lit`
 
-- `front_lit_final.png`
-- `front_lit_diffuse_only.png`
-- `front_lit_specular_only.png`
-- `front_lit_sss_influence.png`
-- `front_lit_sss_membership.png`
-- `front_lit_depth.png`
-- `front_lit_normal.png`
-- `front_lit_pre_blur_diffuse.png`
-- `front_lit_post_blur_diffuse.png`
-
-### Three Quarter
-
-- `three_quarter_final.png`
-- `three_quarter_diffuse_only.png`
-- `three_quarter_specular_only.png`
-- `three_quarter_sss_influence.png`
-- `three_quarter_sss_membership.png`
-- `three_quarter_depth.png`
-- `three_quarter_normal.png`
-- `three_quarter_pre_blur_diffuse.png`
-- `three_quarter_post_blur_diffuse.png`
-
-### Grazing
-
-- `grazing_final.png`
-- `grazing_diffuse_only.png`
-- `grazing_specular_only.png`
-- `grazing_sss_influence.png`
-- `grazing_sss_membership.png`
-- `grazing_depth.png`
-- `grazing_normal.png`
-- `grazing_pre_blur_diffuse.png`
-- `grazing_post_blur_diffuse.png`
-
-### Thin Region
-
-- `thin_region_final.png`
-- `thin_region_diffuse_only.png`
-- `thin_region_specular_only.png`
-- `thin_region_sss_influence.png`
-- `thin_region_sss_membership.png`
-- `thin_region_depth.png`
-- `thin_region_normal.png`
-- `thin_region_pre_blur_diffuse.png`
-- `thin_region_post_blur_diffuse.png`
+- `final.png`
+- `diffuse_only.png`
+- `specular_only.png`
+- `sss_influence.png`
+- `sss_membership.png`
+- `depth.png`
+- `normal.png`
+- `pre_blur_diffuse.png`
+- `post_blur_diffuse.png`
 
 ## Gap Matrix
 
@@ -83,7 +47,7 @@ Capture filenames are deterministic and overwrite previous runs for the same pre
 | world-unit kernel scaling | Kernel radius derives from mean free path distance and world unit scale. | Only a single global projected radius is used. | Reference preset can drift when asset scale changes. | World unit scale is tracked in the sample but not consumed by the engine path. | Move world-unit scaling into the per-pixel Burley parameter block. |
 | Burley kernel shape | Burley uses normalized diffusion with profile-driven adaptive sampling. | A single-radius separable Burley kernel is used. | Band shape is plausible but not yet profile-accurate under all presets. | Current kernel is scalar and global rather than profile-driven. | Match Unreal's per-profile scaling before tuning sample count or weights. |
 | bilateral depth rejection | Depth-aware rejection prevents leaking across discontinuities. | Implemented in the blur pass. | Geometric borders stay sharper than the first prototype. | Depth threshold is still tied to the global scattering distance. | Parameterize the rejection threshold per pixel once profile radii are stored. |
-| bilateral normal rejection | Normals are used to reject taps across sharp shading changes. | Implemented with normals reconstructed from depth. | Works for broad surfaces but can wobble on thin or noisy geometry. | No dedicated normal source is bound into the SSS pass yet. | Promote this to a stored normal input for shipping parity. |
+| bilateral normal rejection | Normals are used to reject taps across sharp shading changes. | Implemented with the stored shaded normal buffer. | SSS weighting now follows the same normal-map detail as the material shading path. | A dedicated SSS normal target is carried from the color pass into blur and recombine. | Validate the stored-normal path on thin detail and grazing angles. |
 | recombine formula | Burley adds scattered diffuse back to untouched non-SSS lighting. | Implemented as original diffuse plus positive scattering delta tinted by subsurface color. | Avoids full-model washout and makes the band visible in the final view. | Previous path used fully blurred diffuse directly. | Validate the delta scale against Unreal's profile tuning once per-pixel tint arrives. |
 | base color application point | Surface albedo participates at setup/recombine according to the profile. | Base color currently still follows Filament's material path rather than an Unreal-equivalent profile block. | Reference albedo is close, but profile coupling is incomplete. | Surface albedo is not stored separately in the SSS setup data. | Add explicit Burley profile mapping for surface albedo versus tint. |
 | boundary color bleed | Boundary bleed is profile-aware and configurable. | Not implemented. | Different SSS materials would hard-stop or incorrectly mix. | No profile id or boundary tuning reaches the blur pass today. | Add profile-aware bleed weighting once profile ids exist. |

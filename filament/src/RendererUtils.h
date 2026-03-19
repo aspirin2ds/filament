@@ -90,12 +90,16 @@ public:
         FrameGraphId<FrameGraphTexture> ssr;
         FrameGraphId<FrameGraphTexture> structure;
         FrameGraphId<FrameGraphTexture> sssDiffuse;
+        FrameGraphId<FrameGraphTexture> sssNormal;
+        FrameGraphId<FrameGraphTexture> sssParams;
     };
     struct ColorPassOutput {
         FrameGraphId<FrameGraphTexture> linearColor;
         FrameGraphId<FrameGraphTexture> tonemappedColor;
         FrameGraphId<FrameGraphTexture> depth;
         FrameGraphId<FrameGraphTexture> sssDiffuse;
+        FrameGraphId<FrameGraphTexture> sssNormal;
+        FrameGraphId<FrameGraphTexture> sssParams;
     };
 
     static ColorPassOutput colorPass(
