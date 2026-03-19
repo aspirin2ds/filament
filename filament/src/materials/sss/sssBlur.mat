@@ -113,6 +113,17 @@ fragment {
         return (s / (8.0 * PI)) * (exp(-s * r) + exp(-s * r / 3.0)) / max(r, 0.0001);
     }
 
+    vec3 burleyProfile3(float r, vec3 d) {
+        vec3 safeD = max(d, vec3(0.0001));
+        vec3 s = 1.0 / safeD;
+        return (s / (8.0 * PI)) * (exp(-s * r) + exp(-s * r / 3.0)) / max(r, 0.0001);
+    }
+
+    vec3 getSearchLightDiffuseScalingFactor3D(vec3 surfaceAlbedo) {
+        vec3 value = surfaceAlbedo - vec3(0.33);
+        return vec3(3.5) + 100.0 * value * value * value * value;
+    }
+
     /**
      * Bilateral depth weight: suppress contributions from pixels at different depths
      * to prevent light leaking across depth discontinuities.
@@ -197,17 +208,19 @@ fragment {
         vec3 centerTint = saturate(centerParamsData.rgb * materialParams.subsurfaceColor);
         float sd = max(centerParamsData.a * materialParams.scatteringDistance, 0.001);
         float scaledSd = sd * materialParams.worldUnitScale;
-        float s = 1.0 / sd;
+        vec3 centerDmfp = max(centerTint * scaledSd, vec3(0.001));
+        vec3 centerD = centerDmfp / getSearchLightDiffuseScalingFactor3D(centerAlbedo);
+        float supportRadius = max(centerDmfp.r, max(centerDmfp.g, centerDmfp.b));
 
         // Use the per-pixel scattering radius and keep view options as a global multiplier.
         float pixelScale = materialParams.projectedScale / centerDepth;
-        float effectiveRadiusPixels = max(scaledSd * pixelScale * 0.5, 1.0);
+        float effectiveRadiusPixels = max(supportRadius * pixelScale * 0.5, 1.0);
 
-        float depthThreshold = scaledSd * 2.0;
+        float depthThreshold = supportRadius * 2.0;
 
-        // Accumulate diffuse-only blur with single Burley kernel
+        // Accumulate diffuse-only blur in lighting space with a per-channel Burley distance.
         vec3 totalDiffuse = centerDiffuse;
-        float totalWeight = 1.0;
+        vec3 totalWeight = vec3(1.0);
 
         int halfSamples = materialParams.sampleCount / 2;
 
@@ -218,7 +231,7 @@ fragment {
             vec2 offset = materialParams.axis * res.zw * samplePixels;
 
             float worldDist = samplePixels / pixelScale;
-            float kernelWeight = burleyProfile(worldDist, s);
+            vec3 kernelWeight = burleyProfile3(worldDist, centerD);
 
             // Positive direction
             vec2 uvP = uv + offset;
@@ -227,7 +240,8 @@ fragment {
             float bilateralP = depthWeight(centerDepth, depthP, depthThreshold);
             float maskP = diffuseDataP.a;
             highp vec3 normalP = estimateSmoothedStoredNormal(uvP, res);
-            float wP = kernelWeight * bilateralP * normalWeight(centerMacroNormal, normalP) * maskP;
+            float filterP = bilateralP * normalWeight(centerMacroNormal, normalP) * maskP;
+            vec3 wP = kernelWeight * filterP;
             vec3 diffuseP = diffuseDataP.rgb;
             if (!recombinePass) {
                 diffuseP /= sampleSurfaceAlbedo(uvP);
@@ -242,7 +256,8 @@ fragment {
             float bilateralN = depthWeight(centerDepth, depthN, depthThreshold);
             float maskN = diffuseDataN.a;
             highp vec3 normalN = estimateSmoothedStoredNormal(uvN, res);
-            float wN = kernelWeight * bilateralN * normalWeight(centerMacroNormal, normalN) * maskN;
+            float filterN = bilateralN * normalWeight(centerMacroNormal, normalN) * maskN;
+            vec3 wN = kernelWeight * filterN;
             vec3 diffuseN = diffuseDataN.rgb;
             if (!recombinePass) {
                 diffuseN /= sampleSurfaceAlbedo(uvN);
@@ -252,7 +267,7 @@ fragment {
         }
 
         // Normalized blurred diffuse
-        vec3 blurredDiffuse = totalDiffuse / totalWeight;
+        vec3 blurredDiffuse = totalDiffuse / max(totalWeight, vec3(1e-4));
         if (!recombinePass) {
             postProcess.color = vec4(blurredDiffuse, centerMask);
             return;
@@ -272,7 +287,7 @@ fragment {
             return;
         }
 
-        float scatterAmount = smoothstep(0.01, 0.35, scaledSd) * centerMask;
+        float scatterAmount = smoothstep(0.01, 0.35, supportRadius) * centerMask;
         float faceBoost = smoothstep(0.22, 0.88, NoV);
         float bandStrength = scatterAmount * mix(0.75, 1.10, faceBoost);
         vec3 lowFrequencyDiffuse = blurredDiffuse;
@@ -340,7 +355,7 @@ fragment {
         float backlight = smoothstep(0.08, 0.7, -rawNoL);
         float thinRegion = 1.0 - centerThickness;
         float transmissionStrength = backlight * silhouette * thinRegion * centerMask;
-        transmissionStrength *= smoothstep(0.05, 0.35, scaledSd);
+        transmissionStrength *= smoothstep(0.05, 0.35, supportRadius);
         transmissionStrength *= 0.35 + 0.65 * (1.0 - edgeAttenuation);
         // Approximate the stronger internal bending from higher-IOR media until the
         // transmission path carries a richer profile payload.
