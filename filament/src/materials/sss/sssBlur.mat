@@ -266,7 +266,6 @@ fragment {
             return;
         }
 
-        float tintAmount = saturate(max(centerTint.r, max(centerTint.g, centerTint.b)));
         float scatterAmount = smoothstep(0.01, 0.35, sd) * centerMask;
         float faceBoost = smoothstep(0.22, 0.88, NoV);
         float bandStrength = scatterAmount * mix(0.75, 1.10, faceBoost);
@@ -289,22 +288,21 @@ fragment {
         float bandPresence = saturate((0.80 * terminatorAnchor + 0.20 * shadowSupport) *
                 litFalloff * silhouetteSuppression);
 
-        float tintInfluence = saturate(
-                centerMask * tintAmount *
+        float lerpFactor = saturate(
+                scatterAmount *
                 (0.75 * terminatorAnchor + 0.15 * shadowSupport + 0.10 * backscatterSupport) *
                 litFalloff * silhouetteSuppression);
-        tintInfluence *= smoothstep(0.0003, 0.008, baseDeltaMagnitude);
-        tintInfluence = max(tintInfluence, bandPresence * scatterAmount * tintAmount * 0.55);
+        lerpFactor *= smoothstep(0.0003, 0.008, baseDeltaMagnitude);
+        lerpFactor = max(lerpFactor, bandPresence * scatterAmount * 0.55);
 
-        vec3 warmTint = mix(vec3(1.0), centerTint * vec3(1.55, 0.98, 0.90), tintInfluence);
-        vec3 recombinedLighting = blurredDiffuse * warmTint;
-        vec3 finalScatterLighting = recombinedLighting;
+        vec3 fadedTint = saturate(centerTint * lerpFactor);
+        vec3 finalScatterLighting = mix(centerSetupLighting, blurredDiffuse, fadedTint);
 
-        float influenceMask = tintInfluence;
+        float influenceMask = max3(fadedTint);
 
         if (materialParams.debugMode == 2) {
             vec3 debugColor = vec3(1.0, 0.35, 0.08) * influenceMask;
-            debugColor += max((recombinedLighting - baseScatterDiffuse) * 3.0, vec3(0.0));
+            debugColor += max((finalScatterLighting - baseScatterDiffuse) * 3.0, vec3(0.0));
             postProcess.color = vec4(debugColor, 1.0);
             return;
         }
