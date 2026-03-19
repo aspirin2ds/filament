@@ -1,42 +1,57 @@
 ---
 name: burley-sss-gap-review
-description: Use when comparing Filament's Burley SSS implementation against the local Unreal Engine source to find gaps, list issues, plan fixes, and patch the highest-value mismatches with a repeatable evidence-driven workflow.
+description: Use when reviewing Filament's current Burley SSS implementation, comparing it against the local Unreal Engine reference, and turning real mismatches into an evidence-backed gap table, patch plan, or code change.
 ---
 
 # Burley SSS Gap Review
 
-Use this skill when the task is to compare Filament's current Burley SSS path with Unreal Engine's Burley / Subsurface Profile implementation, then turn the differences into a concrete patch plan or code changes.
+Use this skill when the task is to understand Filament's current Burley normalized diffusion SSS path, compare it against Unreal's Burley / Subsurface Profile pipeline, and then produce one of:
 
-The goal is not to "eyeball until it looks fine". The goal is to:
+1. a current-state implementation summary
+2. a gap review with evidence
+3. a prioritized patch plan
+4. a focused fix for the highest-value mismatch
 
-1. find the reference behavior in Unreal
-2. find the corresponding Filament path
-3. classify the gap
-4. capture evidence
-5. patch the narrowest root cause first
-6. validate with deterministic debug outputs and captures
+The job is to stay grounded in the current code. Do not repeat older assumptions if the implementation has already moved forward.
+
+## What Is Implemented Right Now
+
+Before calling something a gap, anchor yourself in the current Filament implementation:
+
+- `SUBSURFACE_BURLEY` is a real material shading model.
+- The color pass writes an auxiliary SSS MRT:
+  `vec4(g_sssDiffuse, g_sssMask)`.
+- The renderer allocates that auxiliary target only when SSS is enabled.
+- Post-process applies a two-pass separable Burley blur.
+- The blur is depth-aware and also uses normals reconstructed from depth.
+- The final recombine preserves specular by reconstructing it from:
+  `centerColor - centerSetupDiffuse`.
+- The sample already exposes a deterministic debug / comparison harness.
+
+Do not describe the implementation as "missing diffuse/specular separation" or "missing debug views". Those were older states and are no longer accurate.
 
 ## Inputs You Need
 
 - Filament repo root: current workspace
 - Unreal source tree: `../UnrealEngine`
-- Current Filament Burley sample:
+- Filament skill target:
+  `skills/burley-sss-gap-review/SKILL.md`
+- Sample harness:
   `samples/sample_sss_burley.cpp`
-- Current Filament SSS blur pass:
+- Post-process blur:
   `filament/src/materials/sss/sssBlur.mat`
-- Current post-process integration:
+- Post-process integration:
   `filament/src/PostProcessManager.cpp`
-- Current repo-level comparison notes:
+- Color-pass MRT allocation:
+  `filament/src/RendererUtils.cpp`
+- Shading path:
+  `shaders/src/surface_shading_model_subsurface_burley.fs`
+- Repo notes if present:
   `report.md`
 
-## Main Unreal Reference Files
+## Main Filament Reference Files
 
-- `../UnrealEngine/Engine/Source/Runtime/Engine/Classes/Engine/SubsurfaceProfile.h`
-- `../UnrealEngine/Engine/Source/Runtime/Renderer/Private/PostProcess/PostProcessSubsurface.cpp`
-
-Use these first before chasing wider Unreal files.
-
-## Main Filament Comparison Files
+Read these first:
 
 - `filament/include/filament/Options.h`
 - `filament/src/details/Renderer.cpp`
@@ -50,34 +65,37 @@ Use these first before chasing wider Unreal files.
 - `shaders/src/surface_shading_model_subsurface_burley.fs`
 - `samples/sample_sss_burley.cpp`
 
-## Gap Categories
+## Main Unreal Reference Files
 
-Classify every mismatch into exactly one primary bucket before patching:
+Start narrow and source-first:
 
-- parameterization
-  Unreal has a control or profile field that Filament does not store or interpret correctly.
-- setup / decomposition
-  Filament captures the wrong inputs for the blur or recombine stages.
-- reconstruction / context
-  depth, normal, profile id, thickness, or radius context is missing or unstable.
-- blur kernel / sampling
-  kernel shape, radius scaling, adaptive sampling, or half/full-res policy differs.
-- bilateral rejection
-  taps should be rejected or attenuated differently by depth, normal, or profile.
-- recombine
-  scattered lighting is added back at the wrong stage or with the wrong formula.
-- missing feature
-  transmission, boundary bleed, profile cache, dual specular, TAA interaction, etc.
+- `../UnrealEngine/Engine/Source/Runtime/Engine/Classes/Engine/SubsurfaceProfile.h`
+- `../UnrealEngine/Engine/Source/Runtime/Renderer/Private/PostProcess/PostProcessSubsurface.cpp`
 
-Do not patch before naming the bucket. This prevents "fixes" that only hide the symptom.
+Only expand beyond those if the current question requires it.
 
-## Repeatable Workflow
+## Current Filament Pipeline Snapshot
 
-### 1. Lock the comparison harness first
+Use this exact mental model when reviewing gaps:
 
-Before touching shader behavior, make sure the Filament side can produce deterministic evidence.
+1. Material shading marks Burley pixels and accumulates scatterable diffuse into:
+   `g_sssDiffuse`, `g_sssMask`
+2. `surface_main.fs` writes that data to a second MRT
+3. `RendererUtils.cpp` allocates the `RGBA16F` SSS diffuse buffer when SSS is enabled
+4. `Renderer.cpp` forces the main HDR color buffer to RGBA when Burley SSS is active
+5. `PostProcessManager.cpp` runs horizontal then vertical blur
+6. `sssBlur.mat`:
+   - reads main color
+   - reads SSS diffuse/setup buffer
+   - reads depth
+   - reconstructs normals from depth
+   - computes a scalar Burley kernel from view-global parameters
+   - recombines blurred diffuse with preserved specular
+7. `sample_sss_burley.cpp` drives comparison presets, debug views, metadata dumps, and capture reports
 
-Required outputs:
+## Current Debug Harness
+
+The current skill should assume these debug outputs exist today:
 
 - `final`
 - `diffuse_only`
@@ -89,129 +107,142 @@ Required outputs:
 - `pre_blur_diffuse`
 - `post_blur_diffuse`
 
-Filament already exposes this through:
+At the API level, `SubsurfaceScatteringDebugMode` currently includes:
 
-- `samples/sample_sss_burley.cpp`
-- `filament/include/filament/Options.h`
-- `filament/src/materials/sss/sssBlur.mat`
+- `NONE`
+- `MEMBERSHIP`
+- `INFLUENCE`
+- `PRE_BLUR_DIFFUSE`
+- `POST_BLUR_DIFFUSE`
+- `DEPTH`
+- `NORMAL`
+- `BAND_MASK`
 
-If the bug cannot be isolated with those views, add the missing debug output before changing the main shading path.
+If a bug is hard to isolate, prefer extending this debug path before changing the main shading behavior.
 
-### 2. Read Unreal top-down
+## What The Sample Already Captures
 
-Start with:
+`samples/sample_sss_burley.cpp` is more than a demo. It already contains:
 
-```bash
-sed -n '25,140p' ../UnrealEngine/Engine/Source/Runtime/Engine/Classes/Engine/SubsurfaceProfile.h
-sed -n '1,180p' ../UnrealEngine/Engine/Source/Runtime/Renderer/Private/PostProcess/PostProcessSubsurface.cpp
-rg -n "Burley|SubsurfaceProfile|Mean Free Path|Boundary Color Bleed|Transmission|Dual Specular" \
-  ../UnrealEngine/Engine/Source/Runtime/Engine/Classes/Engine/SubsurfaceProfile.h \
-  ../UnrealEngine/Engine/Source/Runtime/Renderer/Private/PostProcess/PostProcessSubsurface.cpp
-```
+- gap rows for the current comparison report
+- deterministic viewpoint / artifact capture logic
+- a metadata dump for Unreal-style Burley terms
+- a markdown comparison report generator
+- a preset that explicitly tracks Unreal-style profile concepts in sample-space metadata
 
-Extract and record:
+When updating docs or plans, keep the skill aligned with that sample's current report language.
 
-- what data Unreal stores per profile
-- what data Unreal resolves per pixel
-- what passes Unreal uses
-- what is setup vs blur vs recombine vs transmission
-- what is full-quality vs fallback / separable / half-res
+## Gap Categories
 
-Do not infer profile behavior from the UI screenshot alone when the source already states it.
+Classify each mismatch into exactly one primary bucket before patching:
 
-### 3. Read Filament in the same order
+- parameterization
+  Unreal stores or resolves a control that Filament still keeps global, drops, or maps only approximately.
+- setup / decomposition
+  The setup buffer does not carry enough information for blur and recombine.
+- reconstruction / context
+  Depth, normals, profile id, thickness, or other local context is missing or reconstructed weakly.
+- blur kernel / sampling
+  Radius, kernel shape, sample strategy, or projected scaling differs materially.
+- bilateral rejection
+  Tap rejection is too weak, too strong, or missing profile awareness.
+- recombine
+  The blur result is added back at the wrong stage or with the wrong formula.
+- missing feature
+  Transmission, boundary bleed, dual specular, multi-profile handling, half-res variants, and similar parity gaps.
 
-Use the same conceptual order:
+Do not patch before naming the bucket.
 
-1. exposed controls / options
-2. setup buffer contents
-3. blur inputs
-4. kernel and bilateral policy
-5. recombine
-6. sample / debug workflow
+## Repeatable Review Workflow
 
-Suggested commands:
+### 1. Confirm the current Filament state first
+
+Run source inspection before carrying forward an old assumption:
 
 ```bash
 rg -n "SubsurfaceScatteringDebugMode|SubsurfaceScatteringOptions" \
   filament/include/filament/Options.h samples/sample_sss_burley.cpp
 
-rg -n "sssDiffuse|subsurfaceScatteringBlur|hasSubsurfaceScattering" \
-  filament/src/details/Renderer.cpp filament/src/RendererUtils.cpp filament/src/PostProcessManager.cpp
-
-rg -n "g_sssDiffuse|g_sssMask|scatteringDistance|subsurfaceColor|SUBSURFACE_BURLEY" \
+rg -n "g_sssDiffuse|g_sssMask|SUBSURFACE_BURLEY" \
   shaders/src/surface_main.fs \
   shaders/src/surface_lighting.fs \
   shaders/src/surface_light_indirect.fs \
   shaders/src/surface_shading_lit.fs \
   shaders/src/surface_shading_model_subsurface_burley.fs
 
-sed -n '1,260p' filament/src/materials/sss/sssBlur.mat
+rg -n "sssDiffuse|hasSubsurfaceScattering|RGBA16F" \
+  filament/src/RendererUtils.cpp filament/src/details/Renderer.cpp
+
+sed -n '1,320p' filament/src/materials/sss/sssBlur.mat
+sed -n '1218,1355p' filament/src/PostProcessManager.cpp
 ```
 
-### 4. Build a gap table before patching
+Record what is already true before writing a gap list.
 
-For each gap row, fill in:
+### 2. Read Unreal top-down
 
-- behavior
-- Unreal reference
-- current Filament behavior
-- visible symptom
-- likely root cause
-- patch location
-- validation view
-- risk if changed
+```bash
+sed -n '25,140p' ../UnrealEngine/Engine/Source/Runtime/Engine/Classes/Engine/SubsurfaceProfile.h
+sed -n '1,220p' ../UnrealEngine/Engine/Source/Runtime/Renderer/Private/PostProcess/PostProcessSubsurface.cpp
+rg -n "Burley|SubsurfaceProfile|Mean Free Path|Boundary Color Bleed|Transmission|Dual Specular" \
+  ../UnrealEngine/Engine/Source/Runtime/Engine/Classes/Engine/SubsurfaceProfile.h \
+  ../UnrealEngine/Engine/Source/Runtime/Renderer/Private/PostProcess/PostProcessSubsurface.cpp
+```
 
-Use this exact row format in markdown:
+Extract:
+
+- what Unreal stores per profile
+- what Unreal resolves per pixel
+- what belongs to setup, blur, recombine, transmission
+- which quality branches matter for the current comparison
+
+### 3. Build a gap table before patching
+
+Use this exact row format:
 
 ```markdown
 | Behavior | Unreal reference | Filament current | Symptom | Root cause | Patch location | Validation |
 | --- | --- | --- | --- | --- | --- | --- |
 ```
 
-Keep one root cause per row. Split rows if needed.
+Keep one root cause per row.
 
-### 5. Patch from lowest-level root cause upward
+### 4. Patch from the lowest-level root cause upward
 
 Preferred order:
 
-1. setup buffer correctness
-2. per-pixel data availability
+1. setup buffer payload
+2. per-pixel parameter availability
 3. kernel scaling / sampling
 4. bilateral rejection
 5. recombine
-6. sample tooling / capture automation
-7. optional performance variants
+6. debug / capture tooling
+7. optional quality or performance variants
 
-Avoid patching recombine first if setup data is wrong. That usually creates a softer wrong answer.
+Avoid tweaking recombine to hide missing per-pixel setup data.
 
-## Current Known Mismatch Checklist
+## Current Known Gaps
 
-Use this as the default starting list. Confirm each item against the current code before editing.
+Use this as the default starting checklist, but re-verify each item against source before editing.
 
-### A. Per-pixel Burley profile data is incomplete
-
-Unreal stores Burley profile fields such as:
-
-- `SurfaceAlbedo`
-- `MeanFreePathColor`
-- `MeanFreePathDistance`
-- `WorldUnitScale`
-- `Tint`
-- `BoundaryColorBleed`
-- `TransmissionTintColor`
-- dual specular controls
+### A. Diffuse/specular separation is implemented, but profile payload is still incomplete
 
 Current Filament state:
 
-- sample tracks several reference-only values in UI/metadata
-- engine blur still uses view-global `scatteringDistance` and `subsurfaceColor`
-- setup buffer currently stores diffuse RGB plus membership alpha only
+- auxiliary diffuse MRT exists
+- specular is preserved during recombine
+- setup buffer still carries only:
+  diffuse RGB + membership alpha
+
+Real remaining gap:
+
+- no full per-pixel Burley profile payload yet
+- blur still depends on view-global `scatteringDistance` and `subsurfaceColor`
 
 Primary bucket:
 
-- parameterization
 - setup / decomposition
+- parameterization
 
 Likely patch area:
 
@@ -220,37 +251,47 @@ Likely patch area:
 - `filament/src/PostProcessManager.cpp`
 - `filament/src/materials/sss/sssBlur.mat`
 
-### B. World-unit scaling is not in the engine path
+### B. Per-pixel scattering parameters are still missing
 
-Unreal exposes `WorldUnitScale` as part of the Burley profile.
+Unreal resolves profile-driven radius and tint per pixel.
 
 Current Filament state:
 
-- sample can track it
-- blur shader does not receive it as per-pixel data
+- `View::SubsurfaceScatteringOptions` provides global `scatteringDistance`
+- `View::SubsurfaceScatteringOptions` provides global `subsurfaceColor`
+- all SSS pixels share those blur parameters
+
+Primary bucket:
+
+- parameterization
+
+### C. World-unit scaling is only tracked in the sample
+
+Current Filament state:
+
+- sample metadata stores `worldUnitScale`
+- the engine path does not serialize or consume it per pixel
+- blur radius uses projected scale plus global scattering distance only
 
 Primary bucket:
 
 - parameterization
 - blur kernel / sampling
 
-### C. Profile-aware masking is missing
-
-Unreal has profile texture / profile id handling and a Burley profile id cache path.
+### D. Multi-profile / profile-id handling is missing
 
 Current Filament state:
 
 - membership exists
 - profile identity does not
+- different Burley materials would share one global blur profile
 
 Primary bucket:
 
 - reconstruction / context
 - missing feature
 
-### D. Boundary color bleed is missing
-
-Unreal exposes `BoundaryColorBleed`.
+### E. Boundary color bleed is not implemented
 
 Current Filament state:
 
@@ -261,62 +302,64 @@ Primary bucket:
 
 - missing feature
 
-### E. Normals are reconstructed from depth
-
-Unreal uses stronger context than the current lightweight reconstruction fallback.
+### F. Normals are reconstructed from depth
 
 Current Filament state:
 
-- blur estimates normals from depth in `sssBlur.mat`
+- blur uses estimated normals from depth reconstruction
+- this is a real implementation, not a placeholder
+- it is still weaker than having a dedicated stored normal source
 
 Primary bucket:
 
 - reconstruction / context
 
-### F. Transmission parity is missing
-
-Unreal treats transmission as a separate Burley feature family.
+### G. Transmission parity is missing
 
 Current Filament state:
 
-- thickness exists on the material
-- no Burley transmission parity path yet
+- material thickness exists
+- Burley transmission parity does not
+- current work is focused on the lateral screen-space surface band
 
 Primary bucket:
 
 - missing feature
 
-### G. Dual specular parity is missing
-
-Unreal exposes:
-
-- `Roughness0`
-- `Roughness1`
-- `LobeMix`
+### H. Dual specular parity is missing
 
 Current Filament state:
 
-- specular is preserved from blur
-- dual-spec model is not implemented
+- specular preservation exists
+- Unreal-style dual-spec profile controls do not
 
 Primary bucket:
 
 - missing feature
 
-Do not mix this into blur fixes unless the user explicitly asks for dual-spec next.
+Do not collapse this into blur fixes unless the task explicitly asks for it.
 
-## Patch Triage Rules
+### I. Half-res / quality variants are missing
 
-Use these rules to decide what to patch now versus later:
+Current Filament state:
 
-- Patch now if the issue breaks the main reference comparison:
-  setup buffer content, global-vs-per-pixel radius, recombine bug, missing debug view.
-- Patch soon if it materially affects skin-band placement or shape:
-  world-unit scale, profile id handling, stored normals.
-- Defer if it is orthogonal to the current band comparison:
-  dual specular, half-res optimization, TAA tuning.
-- Isolate as a separate task if it changes the light transport family:
-  transmission.
+- only the full-resolution separable path is present
+
+Primary bucket:
+
+- missing feature
+
+### J. TAA-aware Burley quality parity is deferred
+
+Current Filament state:
+
+- the blur is applied before TAA
+- baseline comparison workflow disables TAA for deterministic captures
+
+Primary bucket:
+
+- missing feature
+- validation policy
 
 ## Required Evidence Before Claiming A Gap
 
@@ -324,10 +367,10 @@ Every claimed gap should be backed by at least one of:
 
 - a local Unreal source reference
 - a Filament source reference
-- a deterministic debug capture from the sample
+- a deterministic sample capture or report artifact
 - a parameter mapping mismatch
 
-Prefer source references first, screenshots second.
+Prefer source references first.
 
 ## Required Evidence Before Claiming A Fix
 
@@ -335,17 +378,17 @@ Before claiming a fix, show:
 
 1. which root cause was patched
 2. which files changed
-3. which debug view proves the change
+3. which debug view proves it
 4. which final-view symptom changed
-5. what remains different from Unreal
+5. what still differs from Unreal
 
-Never present "looks closer now" as the only verification.
+Do not settle for "looks closer".
 
 ## Validation Loop
 
 After each meaningful patch:
 
-1. rebuild:
+1. rebuild
 
 ```bash
 cmake --build /Users/aspirin2ds/Workspace/github/filament/out/cmake-debug \
@@ -362,94 +405,26 @@ cmake --build /Users/aspirin2ds/Workspace/github/filament/out/cmake-debug \
    - `final`
 5. update the gap table
 
-If runtime execution is blocked, still update the gap table with:
+If runtime execution is blocked, still record:
 
 - build status
 - why runtime verification was blocked
-- which debug path or source inspection most directly supports the change
+- which source references most directly support the conclusion
 
-## Patch Patterns
+## Patch Triage Rules
 
-### Pattern 1: Setup buffer gap
+- Patch now if it blocks the main reference comparison:
+  setup payload, per-pixel radius/tint, recombine bugs, missing debug evidence.
+- Patch soon if it materially affects band placement or edge stability:
+  world-unit scale, profile id handling, better normal input.
+- Defer if it is orthogonal to current diffuse-band parity:
+  dual specular, half-res optimization, temporal tuning.
+- Isolate as a separate task if it changes the transport family:
+  transmission.
 
-Symptoms:
+## Practical Review Notes
 
-- influence view is wrong even before recombine
-- all SSS materials look the same
-- blur radius ignores per-material intent
-
-Typical edits:
-
-- extend MRT setup output
-- add shader outputs in `surface_main.fs`
-- carry fields from material shading into the setup texture
-
-### Pattern 2: Kernel / radius gap
-
-Symptoms:
-
-- band width is uniformly too broad or too narrow
-- scene scale changes break the match
-
-Typical edits:
-
-- pass world-unit scale or per-pixel radius metadata
-- update blur radius math in `sssBlur.mat`
-
-### Pattern 3: Recombine gap
-
-Symptoms:
-
-- band visible in influence view but not in final
-- whole model washes out
-
-Typical edits:
-
-- preserve original diffuse/specular split
-- add only scattered diffuse delta back
-
-### Pattern 4: Context / edge gap
-
-Symptoms:
-
-- bleed across silhouette or across different materials
-- wobbling edges on thin geometry
-
-Typical edits:
-
-- strengthen depth / normal / profile rejection
-- move from reconstructed normals to stored normals
-
-## Deliverables
-
-When finishing a comparison or patching pass, produce:
-
-- updated markdown gap table
-- concise list of findings ordered by impact
-- changed file list
-- build result
-- remaining high-priority gaps
-
-If asked to only write the plan, do not patch code. Write the plan as a markdown artifact and keep the steps actionable.
-
-## Good Output Shape
-
-Use this section order:
-
-1. reference points
-2. current Filament mapping
-3. confirmed gaps
-4. recommended patch order
-5. validation checklist
-6. deferred items
-
-## Stop Conditions
-
-Stop and escalate to the user if:
-
-- a proposed patch needs a new G-buffer or a major buffer format tradeoff
-- runtime capture is impossible and the next patch would be speculative
-- two candidate fixes have materially different API costs
-- unrelated dirty worktree changes overlap the same files
-
-Otherwise keep going until the gap is either patched, disproven, or explicitly deferred.
+- Treat `samples/sample_sss_burley.cpp` as a source of truth for the current comparison workflow.
+- Treat `sssBlur.mat` as the root of truth for current blur, rejection, debug views, and recombine behavior.
+- Treat `RendererUtils.cpp` and `Renderer.cpp` as the root of truth for whether the pipeline really allocates and schedules the SSS path.
+- When the sample's gap matrix and the skill disagree, update the skill to match the code first, then decide whether the sample text also needs updating.
