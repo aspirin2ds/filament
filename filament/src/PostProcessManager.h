@@ -130,6 +130,7 @@ public:
     FrameGraphId<FrameGraphTexture> subsurfaceScatteringBlur(FrameGraph& fg,
             FrameGraphId<FrameGraphTexture> input,
             FrameGraphId<FrameGraphTexture> diffuse,
+            FrameGraphId<FrameGraphTexture> normal,
             FrameGraphId<FrameGraphTexture> depth,
             const CameraInfo& cameraInfo,
             SubsurfaceScatteringOptions const& options) noexcept;

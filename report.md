@@ -74,7 +74,7 @@ diffing straightforward.
 | World-unit kernel scaling | Radius depends on mean free path distance and world unit scale. | Sample tracks world-unit scale, engine ignores it. | Reference preset can drift when scene scale changes. | No Burley profile block is passed into the post-process pass. | Fold world-unit scale into the stored per-pixel profile parameters. |
 | Burley kernel shape | Adaptive/profile-driven Burley sampling. | Single-radius separable kernel. | Terminator band is plausible but not fully profile-accurate. | Scalar global kernel instead of profile-aware sampling. | Match profile-driven scaling before sample-count tuning. |
 | Bilateral depth rejection | Rejects depth-incompatible taps. | Implemented. | Hard geometric borders remain sharper. | Threshold still depends on the global radius. | Parameterize threshold from per-pixel profile radius. |
-| Bilateral normal rejection | Rejects taps across sharp shading changes. | Implemented with reconstructed normals from depth. | Works for broad regions but can wobble on thin detail. | No dedicated normal buffer is wired into the SSS pass yet. | Move to a stored normal source once the setup path is expanded. |
+| Bilateral normal rejection | Rejects taps across sharp shading changes. | Implemented with the stored shaded normal buffer. | Blur and recombine now follow the same normal-map detail as the material shading path. | A dedicated SSS normal target is carried from the color pass into the blur pass. | Validate the stored-normal path on thin detail and grazing angles. |
 | Recombine formula | Adds scattered diffuse back to untouched non-SSS content. | Implemented as `original diffuse + positive scattering delta * subsurfaceColor`. | Prevents whole-model washout and makes the band visible in the final path. | Earlier prototype used the fully blurred diffuse directly. | Revisit delta scale once profile tint becomes per pixel. |
 | Base color application point | Surface albedo is integrated consistently with the profile. | Still follows Filament's material path rather than a dedicated Burley profile block. | Albedo matching is approximate, not profile-accurate. | Surface albedo is not stored in setup metadata. | Introduce explicit Burley profile mapping for albedo versus tint. |
 | Boundary color bleed | Configurable and profile-aware. | Missing. | Different SSS materials would either stop abruptly or mix incorrectly. | No profile id and no bleed parameter in the blur pass. | Add profile-aware bleed weighting. |
@@ -96,7 +96,7 @@ diffing straightforward.
 
 1. Add per-pixel Burley profile storage to the SSS setup buffer.
 2. Move world-unit scaling and tint out of `View::SubsurfaceScatteringOptions`.
-3. Replace reconstructed normals with a stored normal input for the SSS pass.
+3. Validate the stored normal path on thin detail and grazing-angle captures.
 4. Add profile ids and boundary-color-bleed-aware bilateral weighting.
 5. Implement Burley transmission as a separate tracked feature.
 6. Revisit half-res and TAA behavior only after the direct-light full-resolution baseline matches.

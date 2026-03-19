@@ -47,8 +47,8 @@ material {
 
 fragment {
     void material(inout MaterialInputs material) {
-        prepareMaterial(material);
         material.normal = texture(materialParams_normalMap, getUV0()).xyz * 2.0 - 1.0;
+        prepareMaterial(material);
         material.baseColor.rgb = materialParams.baseColor;
         material.roughness = materialParams.roughness;
         material.metallic = materialParams.metallic;
