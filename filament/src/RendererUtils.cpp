@@ -74,6 +74,7 @@ RendererUtils::ColorPassOutput RendererUtils::colorPass(
         FrameGraphId<FrameGraphTexture> sssDiffuse;
         FrameGraphId<FrameGraphTexture> sssNormal;
         FrameGraphId<FrameGraphTexture> sssParams;
+        FrameGraphId<FrameGraphTexture> sssAlbedo;
     };
 
     auto& colorPass = fg.addPass<ColorPassData>(name,
@@ -90,6 +91,7 @@ RendererUtils::ColorPassOutput RendererUtils::colorPass(
                 data.sssDiffuse = colorPassInput.sssDiffuse;
                 data.sssNormal = colorPassInput.sssNormal;
                 data.sssParams = colorPassInput.sssParams;
+                data.sssAlbedo = colorPassInput.sssAlbedo;
 
                 // Screen-space reflection or refractions
                 if (config.hasScreenSpaceReflectionsOrRefractions) {
@@ -139,6 +141,16 @@ RendererUtils::ColorPassOutput RendererUtils::colorPass(
                 }
                 if (config.hasSubsurfaceScattering && !data.sssParams) {
                     data.sssParams = builder.createTexture("SSS Params Buffer", {
+                            .width = colorBufferDesc.width,
+                            .height = colorBufferDesc.height,
+                            .depth = colorBufferDesc.depth,
+                            .samples = colorBufferDesc.samples,
+                            .type = colorBufferDesc.type,
+                            .format = TextureFormat::RGBA16F
+                    });
+                }
+                if (config.hasSubsurfaceScattering && !data.sssAlbedo) {
+                    data.sssAlbedo = builder.createTexture("SSS Albedo Buffer", {
                             .width = colorBufferDesc.width,
                             .height = colorBufferDesc.height,
                             .depth = colorBufferDesc.depth,
@@ -227,6 +239,10 @@ RendererUtils::ColorPassOutput RendererUtils::colorPass(
                     data.sssParams = builder.read(data.sssParams,
                             FrameGraphTexture::Usage::COLOR_ATTACHMENT);
                 }
+                if (data.sssAlbedo) {
+                    data.sssAlbedo = builder.read(data.sssAlbedo,
+                            FrameGraphTexture::Usage::COLOR_ATTACHMENT);
+                }
 
                 data.color = builder.write(data.color, FrameGraphTexture::Usage::COLOR_ATTACHMENT);
                 data.depth = builder.write(data.depth, depthStencilUsage);
@@ -240,6 +256,10 @@ RendererUtils::ColorPassOutput RendererUtils::colorPass(
                 }
                 if (data.sssParams) {
                     data.sssParams = builder.write(data.sssParams,
+                            FrameGraphTexture::Usage::COLOR_ATTACHMENT);
+                }
+                if (data.sssAlbedo) {
+                    data.sssAlbedo = builder.write(data.sssAlbedo,
                             FrameGraphTexture::Usage::COLOR_ATTACHMENT);
                 }
 
@@ -260,6 +280,7 @@ RendererUtils::ColorPassOutput RendererUtils::colorPass(
                 builder.declareRenderPass("Color Pass Target", {
                         .attachments = { .color = {
                                 data.color, data.sssDiffuse, data.sssNormal, data.sssParams,
+                                data.sssAlbedo,
                                 data.output },
                         .depth = data.depth,
                         .stencil = data.stencil },
@@ -351,7 +372,8 @@ RendererUtils::ColorPassOutput RendererUtils::colorPass(
             .depth = colorPass->depth,
             .sssDiffuse = colorPass->sssDiffuse,
             .sssNormal = colorPass->sssNormal,
-            .sssParams = colorPass->sssParams
+            .sssParams = colorPass->sssParams,
+            .sssAlbedo = colorPass->sssAlbedo
     };
 }
 

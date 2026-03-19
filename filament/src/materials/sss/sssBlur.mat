@@ -28,6 +28,11 @@ material {
         },
         {
             type : sampler2d,
+            name : albedo,
+            precision: medium
+        },
+        {
+            type : sampler2d,
             name : setupDiffuse,
             precision: medium
         },
@@ -131,6 +136,10 @@ fragment {
         return textureLod(materialParams_normal, uv, 0.0);
     }
 
+    vec3 sampleSurfaceAlbedo(vec2 uv) {
+        return max(textureLod(materialParams_albedo, uv, 0.0).rgb, vec3(1e-3));
+    }
+
     highp vec3 estimateSmoothedStoredNormal(highp vec2 uv, highp vec4 res) {
         highp vec2 texel = res.zw;
         highp vec3 center = normalize(sampleStoredNormalData(uv).xyz) * 4.0;
@@ -158,6 +167,7 @@ fragment {
         vec4 centerBlurData = textureLod(materialParams_diffuse, uv, 0.0);
         vec4 centerSetupData = textureLod(materialParams_setupDiffuse, uv, 0.0);
         vec4 centerParamsData = textureLod(materialParams_params, uv, 0.0);
+        vec3 centerAlbedo = sampleSurfaceAlbedo(uv);
         highp float centerDepth = -linearizeDepth(textureLod(materialParams_depth, uv, 0.0).r);
         float centerMask = centerSetupData.a;
 
@@ -171,7 +181,8 @@ fragment {
             return;
         }
 
-        vec3 centerDiffuse = recombinePass ? centerBlurData.rgb : centerSetupData.rgb;
+        vec3 centerSetupLighting = centerSetupData.rgb / centerAlbedo;
+        vec3 centerDiffuse = recombinePass ? centerBlurData.rgb : centerSetupLighting;
         vec3 centerSetupDiffuse = centerSetupData.rgb;
         vec3 centerSpecular = max(centerColor.rgb - centerSetupDiffuse, vec3(0.0));
         highp vec4 centerNormalData = sampleStoredNormalData(uv);
@@ -212,6 +223,9 @@ fragment {
             highp vec3 normalP = estimateSmoothedStoredNormal(uvP, res);
             float wP = kernelWeight * bilateralP * normalWeight(centerMacroNormal, normalP) * maskP;
             vec3 diffuseP = diffuseDataP.rgb;
+            if (!recombinePass) {
+                diffuseP /= sampleSurfaceAlbedo(uvP);
+            }
             totalDiffuse += diffuseP * wP;
             totalWeight += wP;
 
@@ -224,6 +238,9 @@ fragment {
             highp vec3 normalN = estimateSmoothedStoredNormal(uvN, res);
             float wN = kernelWeight * bilateralN * normalWeight(centerMacroNormal, normalN) * maskN;
             vec3 diffuseN = diffuseDataN.rgb;
+            if (!recombinePass) {
+                diffuseN /= sampleSurfaceAlbedo(uvN);
+            }
             totalDiffuse += diffuseN * wN;
             totalWeight += wN;
         }
@@ -254,13 +271,13 @@ fragment {
         float faceBoost = smoothstep(0.22, 0.88, NoV);
         float bandStrength = scatterAmount * mix(0.75, 1.10, faceBoost);
         vec3 lowFrequencyDiffuse = blurredDiffuse;
-        vec3 highFrequencyResidual = max(centerSetupDiffuse - blurredDiffuse, vec3(0.0));
+        vec3 highFrequencyResidual = max(centerSetupLighting - blurredDiffuse, vec3(0.0));
 
         // Keep the final diffuse footprint close to the post-blur result, with only a small
         // amount of local detail preserved from the original diffuse.
         vec3 softenedResidual = highFrequencyResidual * mix(0.05, 0.14, faceBoost);
         vec3 baseScatterDiffuse = max(lowFrequencyDiffuse + softenedResidual, vec3(0.0));
-        vec3 baseScatterDelta = baseScatterDiffuse - centerSetupDiffuse;
+        vec3 baseScatterDelta = baseScatterDiffuse - centerSetupLighting;
         float baseDeltaMagnitude = luminance(abs(baseScatterDelta));
 
         float terminatorAnchor = 1.0 - smoothstep(0.0, mix(0.32, 0.50, NoV), abs(rawNoL));
@@ -280,25 +297,25 @@ fragment {
         tintInfluence = max(tintInfluence, bandPresence * scatterAmount * tintAmount * 0.55);
 
         vec3 warmTint = mix(vec3(1.0), centerTint * vec3(1.55, 0.98, 0.90), tintInfluence);
-        vec3 recombinedDiffuse = blurredDiffuse * warmTint;
-        vec3 finalScatterDiffuse = recombinedDiffuse;
+        vec3 recombinedLighting = blurredDiffuse * warmTint;
+        vec3 finalScatterLighting = recombinedLighting;
 
         float influenceMask = tintInfluence;
 
         if (materialParams.debugMode == 2) {
             vec3 debugColor = vec3(1.0, 0.35, 0.08) * influenceMask;
-            debugColor += max((recombinedDiffuse - baseScatterDiffuse) * 3.0, vec3(0.0));
+            debugColor += max((recombinedLighting - baseScatterDiffuse) * 3.0, vec3(0.0));
             postProcess.color = vec4(debugColor, 1.0);
             return;
         }
 
         if (materialParams.debugMode == 3) {
-            postProcess.color = vec4(centerSetupDiffuse, 1.0);
+            postProcess.color = vec4(centerSetupLighting * centerAlbedo, 1.0);
             return;
         }
 
         if (materialParams.debugMode == 4) {
-            postProcess.color = vec4(blurredDiffuse, 1.0);
+            postProcess.color = vec4(blurredDiffuse * centerAlbedo, 1.0);
             return;
         }
 
@@ -333,7 +350,7 @@ fragment {
             return;
         }
 
-        vec3 finalDiffuse = finalScatterDiffuse + transmission;
+        vec3 finalDiffuse = finalScatterLighting * centerAlbedo + transmission;
         postProcess.color = vec4(finalDiffuse + centerSpecular, centerColor.a);
     }
 }

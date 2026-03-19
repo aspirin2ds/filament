@@ -10,11 +10,12 @@ and transmission weighting.
 
 ### Color pass payload
 
-The current branch writes three dedicated SSS buffers during the color pass:
+The current branch now writes four dedicated SSS buffers during the color pass:
 
 - `sssDiffuse`: diffuse lighting RGB plus SSS membership alpha
 - `sssNormal`: shading normal XYZ plus thickness alpha
 - `sssParams`: subsurface tint RGB plus scattering distance alpha
+- `sssAlbedo`: stored surface albedo for lighting-space recombine
 
 References:
 
@@ -42,8 +43,10 @@ References:
 The recombine pass currently:
 
 - reconstructs a specular estimate with `centerColor - centerSetupDiffuse`
-- computes a heuristic tinted diffuse influence mask
-- applies a warm-tint remap to the blurred diffuse
+- derives diffuse lighting by dividing setup diffuse by stored albedo
+- blurs in lighting space and reapplies albedo at the end
+- still computes a heuristic tinted diffuse influence mask
+- still applies a warm-tint remap in lighting space
 - adds a separate thin-region transmission term
 - now scales that transmission term using view-level `ior`
 
@@ -93,39 +96,31 @@ References:
 
 ## Biggest Remaining Gaps
 
-1. No stored `SurfaceAlbedo` for lighting-space recombine.
-   - Unreal stores and reuses base color explicitly during recombine.
-   - Current Filament does not carry surface albedo in the SSS payload.
-   - That means the branch still tints blurred diffuse directly instead of dividing to lighting
-     space, blending there, and reapplying albedo.
-   - References:
-     [surface_main.fs](/Users/aspirin2ds/Workspace/github/filament/shaders/src/surface_main.fs#L72)
-     [sssBlur.mat](/Users/aspirin2ds/Workspace/github/filament/filament/src/materials/sss/sssBlur.mat#L283)
-
-2. No explicit `WorldUnitScale` or richer mean-free-path payload.
+1. No explicit `WorldUnitScale` or richer mean-free-path payload.
    - Unreal derives Burley scale from profile data including `SurfaceAlbedo`,
      `DiffuseMeanFreePath`, and `WorldUnitScale`.
-   - Current Filament only carries tint and scattering distance in `sssParams`.
+   - Current Filament now carries albedo, but it still only carries tint and scattering distance
+     for Burley-specific profile behavior.
    - The blur radius is therefore simpler and less profile-faithful.
    - References:
      [PostProcessSubsurfaceCommon.ush](/Users/aspirin2ds/Workspace/github/filament/../UnrealEngine/Engine/Shaders/Private/PostProcessSubsurfaceCommon.ush#L89)
      [sssBlur.mat](/Users/aspirin2ds/Workspace/github/filament/filament/src/materials/sss/sssBlur.mat#L170)
 
-3. No profile identity.
+2. No profile identity.
    - Unreal can keep profile identity through postprocess and fetch profile rows.
    - Current Filament has no profile id in the payload, so mixed-material separation can only be
      approximated indirectly.
    - Reference:
      [SeparableSSS.ush](/Users/aspirin2ds/Workspace/github/filament/../UnrealEngine/Engine/Shaders/Private/SeparableSSS.ush#L158)
 
-4. Recombine is still heuristic rather than profile-driven.
+3. Recombine is still heuristic rather than profile-driven.
    - Current Filament uses `terminatorAnchor`, `shadowSupport`, `backscatterSupport`, and
      `warmTint` heuristics.
    - Unreal's recombine logic is more explicitly tied to profile tint and weighting terms.
    - Reference:
      [sssBlur.mat](/Users/aspirin2ds/Workspace/github/filament/filament/src/materials/sss/sssBlur.mat#L264)
 
-5. Transmission remains approximate.
+4. Transmission remains approximate.
    - `ior` now contributes, which is an improvement.
    - However, there is still no richer transmission profile data, thickness-profile lookup, or
      per-pixel transmission payload beyond thickness from `sssNormal.a`.
@@ -133,13 +128,13 @@ References:
      [TransmissionCommon.ush](/Users/aspirin2ds/Workspace/github/filament/../UnrealEngine/Engine/Shaders/Private/TransmissionCommon.ush#L12)
      [sssBlur.mat](/Users/aspirin2ds/Workspace/github/filament/filament/src/materials/sss/sssBlur.mat#L314)
 
-6. Dual specular is still missing.
+5. Dual specular is still missing.
    - Unreal profile data includes dual-spec terms.
    - Current Filament preserves ordinary specular only.
    - Reference:
      [SubsurfaceProfileCommon.ush](/Users/aspirin2ds/Workspace/github/filament/../UnrealEngine/Engine/Shaders/Private/SubsurfaceProfileCommon.ush#L82)
 
-7. The sample/report workflow still uses older debug naming.
+6. The sample/report workflow still uses older debug naming.
    - The current debug views are still `TERMINATOR_WINDOW`, `BAND_MASK`, and `TRANSMISSION`.
    - The report should describe those as the branch's current debug views, not as parity with
      newer conceptual stages that do not exist in code yet.
@@ -151,12 +146,12 @@ References:
 
 The next highest-value step to shrink the gap is:
 
-1. Add stored `SurfaceAlbedo` to the SSS payload.
-2. Change recombine to operate in lighting space:
-   - derive center diffuse lighting by dividing out albedo
-   - blur and blend in lighting space
-   - reapply albedo at the end
-   - keep preserved specular separate
+1. Add explicit Burley profile-scale data to the payload.
+2. Replace the current radius and weighting heuristics with scaling closer to Unreal's Burley
+   model:
+   - incorporate world-unit scale explicitly
+   - separate mean-free-path / profile scaling from simple tint
+   - reduce reliance on the warm-tint heuristic during recombine
 
 This is the best next move because it unlocks multiple parity improvements at once:
 
@@ -176,9 +171,8 @@ complexity without addressing the more visible single-material mismatch.
 
 ## Concrete Follow-Up Order
 
-1. Add one more SSS payload channel or repack the existing payload so surface albedo is available in
-   recombine.
-2. Replace the current warm-tint recombine with lighting-space divide / blur / reapply.
+1. Add explicit Burley scale inputs such as world-unit scale to the payload.
+2. Tighten kernel scaling and recombine weighting against Unreal's Burley math.
 3. Re-evaluate whether the remaining error is mostly from profile scaling math or from mixed-profile
    separation.
 4. If mixed-profile separation is then visibly wrong, add profile identity or a profile-compatible

@@ -132,6 +132,7 @@ public:
             FrameGraphId<FrameGraphTexture> diffuse,
             FrameGraphId<FrameGraphTexture> normal,
             FrameGraphId<FrameGraphTexture> params,
+            FrameGraphId<FrameGraphTexture> albedo,
             FrameGraphId<FrameGraphTexture> depth,
             const CameraInfo& cameraInfo,
             SubsurfaceScatteringOptions const& options) noexcept;

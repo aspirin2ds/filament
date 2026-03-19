@@ -92,6 +92,7 @@ public:
         FrameGraphId<FrameGraphTexture> sssDiffuse;
         FrameGraphId<FrameGraphTexture> sssNormal;
         FrameGraphId<FrameGraphTexture> sssParams;
+        FrameGraphId<FrameGraphTexture> sssAlbedo;
     };
     struct ColorPassOutput {
         FrameGraphId<FrameGraphTexture> linearColor;
@@ -100,6 +101,7 @@ public:
         FrameGraphId<FrameGraphTexture> sssDiffuse;
         FrameGraphId<FrameGraphTexture> sssNormal;
         FrameGraphId<FrameGraphTexture> sssParams;
+        FrameGraphId<FrameGraphTexture> sssAlbedo;
     };
 
     static ColorPassOutput colorPass(
