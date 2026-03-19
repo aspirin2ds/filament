@@ -1236,6 +1236,7 @@ static Status processShading(MaterialBuilder& builder, const JsonishValue& value
         { "cloth",              MaterialBuilder::Shading::CLOTH },
         { "lit",                MaterialBuilder::Shading::LIT },
         { "subsurface",         MaterialBuilder::Shading::SUBSURFACE },
+        { "subsurfaceBurley",   MaterialBuilder::Shading::SUBSURFACE_BURLEY },
         { "unlit",              MaterialBuilder::Shading::UNLIT },
         { "specularGlossiness", MaterialBuilder::Shading::SPECULAR_GLOSSINESS },
     };

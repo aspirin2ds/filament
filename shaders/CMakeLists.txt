@@ -47,6 +47,7 @@ set(SHADERS
         src/surface_shading_model_cloth.fs
         src/surface_shading_model_standard.fs
         src/surface_shading_model_subsurface.fs
+        src/surface_shading_model_subsurface_burley.fs
         src/surface_shading_parameters.fs
         src/surface_shading_reflections.fs
         src/surface_shading_unlit.fs

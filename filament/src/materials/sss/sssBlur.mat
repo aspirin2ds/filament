@@ -1,0 +1,268 @@
+material {
+    name : sssBlur,
+    parameters : [
+        {
+            type : sampler2d,
+            name : color,
+            precision: medium
+        },
+        {
+            type : sampler2d,
+            name : depth,
+            precision: high
+        },
+        {
+            type : sampler2d,
+            name : diffuse,
+            precision: medium
+        },
+        {
+            type : sampler2d,
+            name : setupDiffuse,
+            precision: medium
+        },
+        {
+            type : float2,
+            name : axis,
+            precision: high
+        },
+        {
+            type : float4,
+            name : resolution,
+            precision: high
+        },
+        {
+            type : float,
+            name : scatteringDistance,
+            precision: high
+        },
+        {
+            type : float3,
+            name : subsurfaceColor,
+            precision: medium
+        },
+        {
+            type : float,
+            name : cameraFar,
+            precision: high
+        },
+        {
+            type : int,
+            name : sampleCount
+        },
+        {
+            type : float,
+            name : projectedScale,
+            precision: high
+        },
+        {
+            type : int,
+            name : debugMode
+        },
+        {
+            type : int,
+            name : passIndex
+        }
+    ],
+    variables : [
+        vertex
+    ],
+    domain : postprocess,
+    depthWrite : false,
+    depthCulling : false
+}
+
+vertex {
+    void postProcessVertex(inout PostProcessVertexInputs postProcess) {
+        postProcess.vertex.xy = uvToRenderTargetUV(postProcess.normalizedUV);
+    }
+}
+
+fragment {
+    /**
+     * Burley Normalized Diffusion profile (scalar):
+     *   R(r) = s / (8 * pi * r) * (exp(-s * r) + exp(-s * r / 3))
+     * where s = 1.0 / scatteringDistance
+     */
+    float burleyProfile(float r, float s) {
+        return (s / (8.0 * PI)) * (exp(-s * r) + exp(-s * r / 3.0)) / max(r, 0.0001);
+    }
+
+    /**
+     * Bilateral depth weight: suppress contributions from pixels at different depths
+     * to prevent light leaking across depth discontinuities.
+     */
+    float depthWeight(highp float centerDepth, highp float sampleDepth, float threshold) {
+        float diff = abs(sampleDepth - centerDepth) / threshold;
+        return max(0.0, 1.0 - diff * diff);
+    }
+
+    /**
+     * Linearize depth from the depth buffer.
+     */
+    highp float linearizeDepth(highp float depth) {
+        const highp float preventDiv0 = 1.0 / 16777216.0;
+        highp mat4 p = getViewFromClipMatrix();
+        return (depth * p[2].z + p[3].z) / max(depth * p[2].w + p[3].w, preventDiv0);
+    }
+
+    highp vec3 reconstructViewPosition(highp vec2 uv, highp float depth) {
+        highp vec4 clip = vec4(uv * 2.0 - 1.0, depth, 1.0);
+        highp vec4 view = getViewFromClipMatrix() * clip;
+        return view.xyz / max(view.w, 1e-6);
+    }
+
+    highp vec3 estimateViewNormal(highp vec2 uv, highp vec4 res) {
+        highp vec2 texel = res.zw;
+        highp vec2 uvX = clamp(uv + vec2(texel.x, 0.0), texel * 0.5, vec2(1.0) - texel * 0.5);
+        highp vec2 uvY = clamp(uv + vec2(0.0, texel.y), texel * 0.5, vec2(1.0) - texel * 0.5);
+        highp float depthC = textureLod(materialParams_depth, uv, 0.0).r;
+        highp float depthX = textureLod(materialParams_depth, uvX, 0.0).r;
+        highp float depthY = textureLod(materialParams_depth, uvY, 0.0).r;
+        highp vec3 center = reconstructViewPosition(uv, depthC);
+        highp vec3 dx = reconstructViewPosition(uvX, depthX) - center;
+        highp vec3 dy = reconstructViewPosition(uvY, depthY) - center;
+        return normalize(cross(dx, dy));
+    }
+
+    float normalWeight(highp vec3 centerNormal, highp vec3 sampleNormal) {
+        return sqrt(saturate(dot(centerNormal, sampleNormal) * 0.5 + 0.5));
+    }
+
+    void postProcess(inout PostProcessInputs postProcess) {
+        highp vec2 uv = variable_vertex.xy;
+        highp vec4 res = materialParams.resolution;
+        bool recombinePass = materialParams.passIndex != 0;
+
+        vec4 centerColor = textureLod(materialParams_color, uv, 0.0);
+        vec4 centerBlurData = textureLod(materialParams_diffuse, uv, 0.0);
+        vec4 centerSetupData = textureLod(materialParams_setupDiffuse, uv, 0.0);
+        highp float centerDepth = -linearizeDepth(textureLod(materialParams_depth, uv, 0.0).r);
+        float centerMask = centerSetupData.a;
+
+        // If depth is very far (sky) or invalid, skip SSS
+        if (centerDepth > materialParams.cameraFar * 0.99 || centerDepth < 0.001 || centerMask < 0.001) {
+            if (!recombinePass) {
+                postProcess.color = centerSetupData;
+            } else {
+                postProcess.color = materialParams.debugMode != 0 ? vec4(0.0, 0.0, 0.0, 1.0) : centerColor;
+            }
+            return;
+        }
+
+        vec3 centerDiffuse = recombinePass ? centerBlurData.rgb : centerSetupData.rgb;
+        vec3 centerSetupDiffuse = centerSetupData.rgb;
+        vec3 centerSpecular = max(centerColor.rgb - centerSetupDiffuse, vec3(0.0));
+        highp vec3 centerNormal = estimateViewNormal(uv, res);
+
+        float sd = max(materialParams.scatteringDistance, 0.001);
+        float s = 1.0 / sd;
+
+        // Single-radius blur kernel based on base scatteringDistance.
+        float pixelScale = materialParams.projectedScale / centerDepth;
+        float effectiveRadiusPixels = max(sd * pixelScale * 0.5, 1.0);
+
+        float depthThreshold = sd * 2.0;
+
+        // Accumulate diffuse-only blur with single Burley kernel
+        vec3 totalDiffuse = centerDiffuse;
+        float totalWeight = 1.0;
+
+        int halfSamples = materialParams.sampleCount / 2;
+
+        float pixelsPerStep = effectiveRadiusPixels / float(halfSamples);
+        vec2 stepOffset = materialParams.axis * res.zw * pixelsPerStep;
+
+        for (int i = 1; i <= halfSamples; i++) {
+            float fi = float(i);
+            vec2 offset = stepOffset * fi;
+
+            float worldDist = fi * pixelsPerStep / pixelScale;
+            float kernelWeight = burleyProfile(worldDist, s);
+
+            // Positive direction
+            vec2 uvP = uv + offset;
+            vec4 diffuseDataP = textureLod(materialParams_diffuse, uvP, 0.0);
+            highp float depthP = -linearizeDepth(textureLod(materialParams_depth, uvP, 0.0).r);
+            float bilateralP = depthWeight(centerDepth, depthP, depthThreshold);
+            float maskP = diffuseDataP.a;
+            highp vec3 normalP = estimateViewNormal(uvP, res);
+            float wP = kernelWeight * bilateralP * normalWeight(centerNormal, normalP) * maskP;
+            vec3 diffuseP = diffuseDataP.rgb;
+            totalDiffuse += diffuseP * wP;
+            totalWeight += wP;
+
+            // Negative direction
+            vec2 uvN = uv - offset;
+            vec4 diffuseDataN = textureLod(materialParams_diffuse, uvN, 0.0);
+            highp float depthN = -linearizeDepth(textureLod(materialParams_depth, uvN, 0.0).r);
+            float bilateralN = depthWeight(centerDepth, depthN, depthThreshold);
+            float maskN = diffuseDataN.a;
+            highp vec3 normalN = estimateViewNormal(uvN, res);
+            float wN = kernelWeight * bilateralN * normalWeight(centerNormal, normalN) * maskN;
+            vec3 diffuseN = diffuseDataN.rgb;
+            totalDiffuse += diffuseN * wN;
+            totalWeight += wN;
+        }
+
+        // Normalized blurred diffuse
+        vec3 blurredDiffuse = totalDiffuse / totalWeight;
+        if (!recombinePass) {
+            postProcess.color = vec4(blurredDiffuse, centerMask);
+            return;
+        }
+
+        vec3 scatteringDelta = blurredDiffuse - centerSetupDiffuse;
+
+        if (materialParams.debugMode == 1) {
+            postProcess.color = vec4(vec3(centerMask), 1.0);
+            return;
+        }
+
+        float deltaMagnitude = luminance(abs(scatteringDelta));
+        float bandMask = smoothstep(0.01, 0.06, deltaMagnitude);
+
+        if (materialParams.debugMode == 2) {
+            // The visible scatter band is the region where the blurred diffuse meaningfully differs
+            // from the center sample. Use the absolute delta here so the debug view tracks the full
+            // terminator reshaping rather than only positive additive lift.
+            vec3 debugColor = mix(vec3(0.0), vec3(1.0, 0.3, 0.05), bandMask);
+            postProcess.color = vec4(debugColor, 1.0);
+            return;
+        }
+
+        if (materialParams.debugMode == 3) {
+            postProcess.color = vec4(centerSetupDiffuse, 1.0);
+            return;
+        }
+
+        if (materialParams.debugMode == 4) {
+            postProcess.color = vec4(blurredDiffuse, 1.0);
+            return;
+        }
+
+        if (materialParams.debugMode == 5) {
+            float depthVis = saturate(centerDepth / max(materialParams.cameraFar, 0.001));
+            postProcess.color = vec4(vec3(depthVis), 1.0);
+            return;
+        }
+
+        if (materialParams.debugMode == 6) {
+            postProcess.color = vec4(centerNormal * 0.5 + 0.5, 1.0);
+            return;
+        }
+
+        if (materialParams.debugMode == 7) {
+            postProcess.color = vec4(vec3(bandMask), 1.0);
+            return;
+        }
+
+        // Unreal-style recombine trend: blend original diffuse lighting toward the scattered result
+        // using the tint as the interpolation weight. This reshapes the terminator instead of
+        // creating a second additive hump deeper in shadow.
+        const float tintBoost = 1.35;
+        vec3 fadedTint = saturate(materialParams.subsurfaceColor * tintBoost);
+        vec3 finalDiffuse = mix(centerSetupDiffuse, blurredDiffuse, fadedTint);
+        postProcess.color = vec4(finalDiffuse + centerSpecular, centerColor.a);
+    }
+}

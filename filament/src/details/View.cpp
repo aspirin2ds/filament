@@ -1456,6 +1456,11 @@ void FView::setScreenSpaceReflectionsOptions(ScreenSpaceReflectionsOptions optio
     mScreenSpaceReflectionsOptions = options;
 }
 
+void FView::setSubsurfaceScatteringOptions(SubsurfaceScatteringOptions options) noexcept {
+    options.sampleCount = std::max(uint8_t(3), std::min(uint8_t(25), options.sampleCount));
+    mSubsurfaceScatteringOptions = options;
+}
+
 void FView::setGuardBandOptions(GuardBandOptions const options) noexcept {
     mGuardBandOptions = options;
 }

@@ -773,6 +773,55 @@ struct StereoscopicOptions {
     bool enabled = false;
 };
 
+enum class SubsurfaceScatteringDebugMode : uint8_t {
+    NONE,
+    MEMBERSHIP,
+    INFLUENCE,
+    PRE_BLUR_DIFFUSE,
+    POST_BLUR_DIFFUSE,
+    DEPTH,
+    NORMAL,
+    BAND_MASK
+};
+
+/**
+ * Options for screen-space subsurface scattering (Burley normalized diffusion).
+ *
+ * When enabled, a separable bilateral blur is applied to the color buffer after the
+ * color pass, using the Burley normalized diffusion kernel weighted by depth to prevent
+ * light bleeding across depth discontinuities.
+ */
+struct SubsurfaceScatteringOptions {
+    /**
+     * Enable or disable the screen-space SSS blur pass.
+     */
+    bool enabled = false;
+
+    /**
+     * Number of samples per axis for the separable blur kernel (range: 3-25).
+     * Higher values produce smoother scattering at the cost of performance.
+     */
+    uint8_t sampleCount = 11;
+
+    /**
+     * World-space scattering distance. Controls how far light diffuses under the surface.
+     * Larger values produce wider, softer blur.
+     */
+    float scatteringDistance = 1.0f;
+
+    /**
+     * Per-channel subsurface color tint. Controls the blend weight between original and
+     * blurred color for each channel. Higher values = more scattering for that channel.
+     * Typical skin: {0.8, 0.3, 0.2} (red scatters most).
+     */
+    math::float3 subsurfaceColor = { 0.8f, 0.3f, 0.2f };
+
+    /**
+     * Optional debug visualization for the SSS setup / blur pass.
+     */
+    SubsurfaceScatteringDebugMode debugMode = SubsurfaceScatteringDebugMode::NONE;
+};
+
 } // namespace filament
 
 #endif //TNT_FILAMENT_OPTIONS_H

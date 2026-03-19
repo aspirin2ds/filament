@@ -146,6 +146,14 @@ const View::ScreenSpaceReflectionsOptions& View::getScreenSpaceReflectionsOption
     return downcast(this)->getScreenSpaceReflectionsOptions();
 }
 
+void View::setSubsurfaceScatteringOptions(SubsurfaceScatteringOptions options) noexcept {
+    downcast(this)->setSubsurfaceScatteringOptions(options);
+}
+
+SubsurfaceScatteringOptions const& View::getSubsurfaceScatteringOptions() const noexcept {
+    return downcast(this)->getSubsurfaceScatteringOptions();
+}
+
 void View::setGuardBandOptions(GuardBandOptions const options) noexcept {
     downcast(this)->setGuardBandOptions(options);
 }

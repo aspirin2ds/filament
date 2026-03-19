@@ -97,6 +97,8 @@ static string_view readShadingModel(string_view cursor, Shading* shading) {
         *shading = Shading::CLOTH;
     } else if (sz = readPrefix("specularGlossiness"sv, cursor); sz > 0) {
         *shading = Shading::SPECULAR_GLOSSINESS;
+    } else if (sz = readPrefix("subsurfaceBurley"sv, cursor); sz > 0) {
+        *shading = Shading::SUBSURFACE_BURLEY;
     }
     return { cursor.data(), sz };
 }

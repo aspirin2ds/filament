@@ -61,6 +61,7 @@ set(SRCS
         src/materials/fsr/fsr.cpp
         src/materials/sgsr/sgsr.cpp
         src/materials/ssao/ssao.cpp
+        src/materials/sss/sss.cpp
         src/AtlasAllocator.cpp
         src/BufferObject.cpp
         src/Camera.cpp
@@ -301,6 +302,7 @@ set(MATERIAL_SRCS
         src/materials/ssao/mipmapDepth.mat
         src/materials/ssao/sao.mat
         src/materials/ssao/saoBentNormals.mat
+        src/materials/sss/sssBlur.mat
         src/materials/vsmMipmap.mat
 )
 

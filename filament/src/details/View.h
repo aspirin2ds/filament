@@ -300,6 +300,12 @@ public:
         return mScreenSpaceReflectionsOptions;
     }
 
+    void setSubsurfaceScatteringOptions(SubsurfaceScatteringOptions options) noexcept;
+
+    SubsurfaceScatteringOptions const& getSubsurfaceScatteringOptions() const noexcept {
+        return mSubsurfaceScatteringOptions;
+    }
+
     void setGuardBandOptions(GuardBandOptions options) noexcept;
 
     GuardBandOptions const& getGuardBandOptions() const noexcept {
@@ -607,6 +613,7 @@ private:
     TemporalAntiAliasingOptions mTemporalAntiAliasingOptions;
     MultiSampleAntiAliasingOptions mMultiSampleAntiAliasingOptions;
     ScreenSpaceReflectionsOptions mScreenSpaceReflectionsOptions;
+    SubsurfaceScatteringOptions mSubsurfaceScatteringOptions;
     GuardBandOptions mGuardBandOptions;
     StereoscopicOptions mStereoscopicOptions;
     BlendMode mBlendMode = BlendMode::OPAQUE;

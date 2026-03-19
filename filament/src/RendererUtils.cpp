@@ -71,6 +71,7 @@ RendererUtils::ColorPassOutput RendererUtils::colorPass(
         FrameGraphId<FrameGraphTexture> ssao;
         FrameGraphId<FrameGraphTexture> ssr;    // either screen-space reflections or refractions
         FrameGraphId<FrameGraphTexture> structure;
+        FrameGraphId<FrameGraphTexture> sssDiffuse;
     };
 
     auto& colorPass = fg.addPass<ColorPassData>(name,
@@ -84,6 +85,7 @@ RendererUtils::ColorPassOutput RendererUtils::colorPass(
                 data.depth = colorPassInput.depth;
                 data.shadows = colorPassInput.shadows;
                 data.ssao = colorPassInput.ssao;
+                data.sssDiffuse = colorPassInput.sssDiffuse;
 
                 // Screen-space reflection or refractions
                 if (config.hasScreenSpaceReflectionsOrRefractions) {
@@ -109,6 +111,17 @@ RendererUtils::ColorPassOutput RendererUtils::colorPass(
 
                 if (!data.color) {
                     data.color = builder.createTexture("Color Buffer", colorBufferDesc);
+                }
+
+                if (config.hasSubsurfaceScattering && !data.sssDiffuse) {
+                    data.sssDiffuse = builder.createTexture("SSS Diffuse Buffer", {
+                            .width = colorBufferDesc.width,
+                            .height = colorBufferDesc.height,
+                            .depth = colorBufferDesc.depth,
+                            .samples = colorBufferDesc.samples,
+                            .type = colorBufferDesc.type,
+                            .format = TextureFormat::RGBA16F
+                    });
                 }
 
                 const bool canAutoResolveDepth = config.isAutoDepthResolveSupported;
@@ -178,9 +191,17 @@ RendererUtils::ColorPassOutput RendererUtils::colorPass(
                 // when the color pass happens in several passes (e.g. with SSR)
                 data.color = builder.read(data.color, FrameGraphTexture::Usage::COLOR_ATTACHMENT);
                 data.depth = builder.read(data.depth, depthStencilUsage);
+                if (data.sssDiffuse) {
+                    data.sssDiffuse = builder.read(data.sssDiffuse,
+                            FrameGraphTexture::Usage::COLOR_ATTACHMENT);
+                }
 
                 data.color = builder.write(data.color, FrameGraphTexture::Usage::COLOR_ATTACHMENT);
                 data.depth = builder.write(data.depth, depthStencilUsage);
+                if (data.sssDiffuse) {
+                    data.sssDiffuse = builder.write(data.sssDiffuse,
+                            FrameGraphTexture::Usage::COLOR_ATTACHMENT);
+                }
 
                 /*
                  * There is a bit of magic happening here regarding the viewport used.
@@ -197,7 +218,7 @@ RendererUtils::ColorPassOutput RendererUtils::colorPass(
                  * is initialized in this file).
                  */
                 builder.declareRenderPass("Color Pass Target", {
-                        .attachments = { .color = { data.color, data.output },
+                        .attachments = { .color = { data.color, data.sssDiffuse, data.output },
                         .depth = data.depth,
                         .stencil = data.stencil },
                         .clearColor = config.clearColor,
@@ -285,7 +306,8 @@ RendererUtils::ColorPassOutput RendererUtils::colorPass(
     return {
             .linearColor = colorPass->color,
             .tonemappedColor = colorPass->output,   // can be null
-            .depth = colorPass->depth
+            .depth = colorPass->depth,
+            .sssDiffuse = colorPass->sssDiffuse
     };
 }
 

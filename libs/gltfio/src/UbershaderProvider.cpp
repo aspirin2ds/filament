@@ -411,6 +411,7 @@ const char* toString(Shading shadingModel) noexcept {
         case Shading::SUBSURFACE: return "subsurface";
         case Shading::CLOTH: return "cloth";
         case Shading::SPECULAR_GLOSSINESS: return "specularGlossiness";
+        case Shading::SUBSURFACE_BURLEY: return "subsurfaceBurley";
     }
 }
 

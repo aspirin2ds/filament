@@ -37,6 +37,7 @@ set(MATERIAL_SRCS
         materials/sandboxLitSolidRefractionSsr.mat
         materials/sandboxSpecGloss.mat
         materials/sandboxSubsurface.mat
+        materials/sandboxSubsurfaceBurley.mat
         materials/sandboxUnlit.mat
         materials/texturedLit.mat
         materials/uvmorph.mat
@@ -296,6 +297,7 @@ if (NOT ANDROID)
     add_demo(shadowtest)
     add_demo(skinningtest)
     add_demo(strobecolor)
+    add_demo(sample_sss_burley)
     add_demo(suzanne)
     add_demo(texturedquad)
     add_demo(vbotest)
@@ -313,6 +315,7 @@ if (NOT ANDROID)
     target_link_libraries(rendertarget PRIVATE filameshio suzanne-resources)
     target_link_libraries(sample_cloth PRIVATE filameshio)
     target_link_libraries(sample_normal_map PRIVATE filameshio)
+    target_link_libraries(sample_sss_burley PRIVATE filameshio suzanne-resources imageio)
     target_link_libraries(suzanne PRIVATE filameshio suzanne-resources)
 
     if (FILAMENT_DISABLE_MATOPT)

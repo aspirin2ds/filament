@@ -69,7 +69,7 @@ void getCommonPixelParams(const MaterialInputs material, inout PixelParams pixel
     pixel.f0 = specularColor;
 #elif !defined(SHADING_MODEL_CLOTH)
     pixel.diffuseColor = computeDiffuseColor(baseColor, material.metallic);
-#if !defined(SHADING_MODEL_SUBSURFACE) && (!defined(MATERIAL_HAS_REFLECTANCE) && defined(MATERIAL_HAS_IOR))
+#if !defined(SHADING_MODEL_SUBSURFACE) && !defined(SHADING_MODEL_SUBSURFACE_BURLEY) && (!defined(MATERIAL_HAS_REFLECTANCE) && defined(MATERIAL_HAS_IOR))
     float reflectance = iorToF0(max(1.0, material.ior), 1.0);
 #else
     // Assumes an interface from air to an IOR of 1.5 for dielectrics
@@ -98,7 +98,7 @@ void getCommonPixelParams(const MaterialInputs material, inout PixelParams pixel
 #endif
 #endif
 
-#if !defined(SHADING_MODEL_CLOTH) && !defined(SHADING_MODEL_SUBSURFACE)
+#if !defined(SHADING_MODEL_CLOTH) && !defined(SHADING_MODEL_SUBSURFACE) && !defined(SHADING_MODEL_SUBSURFACE_BURLEY)
 #if defined(MATERIAL_HAS_REFRACTION)
     // Air's Index of refraction is 1.000277 at STP but everybody uses 1.0
     const float airIor = 1.0;
@@ -148,7 +148,7 @@ void getSpecularPixelParams(const MaterialInputs material, inout PixelParams pix
 }
 
 void getSheenPixelParams(const MaterialInputs material, inout PixelParams pixel) {
-#if defined(MATERIAL_HAS_SHEEN_COLOR) && !defined(SHADING_MODEL_CLOTH) && !defined(SHADING_MODEL_SUBSURFACE)
+#if defined(MATERIAL_HAS_SHEEN_COLOR) && !defined(SHADING_MODEL_CLOTH) && !defined(SHADING_MODEL_SUBSURFACE) && !defined(SHADING_MODEL_SUBSURFACE_BURLEY)
     pixel.sheenColor = material.sheenColor;
 
     float sheenPerceptualRoughness = material.sheenRoughness;
@@ -223,6 +223,11 @@ void getSubsurfacePixelParams(const MaterialInputs material, inout PixelParams p
 #if defined(SHADING_MODEL_SUBSURFACE)
     pixel.subsurfacePower = material.subsurfacePower;
     pixel.subsurfaceColor = material.subsurfaceColor;
+    pixel.thickness = saturate(material.thickness);
+#endif
+#if defined(SHADING_MODEL_SUBSURFACE_BURLEY)
+    pixel.subsurfaceColor = material.subsurfaceColor;
+    pixel.scatteringDistance = max(material.scatteringDistance, 0.001);
     pixel.thickness = saturate(material.thickness);
 #endif
 }
@@ -303,7 +308,8 @@ vec4 evaluateLights(const MaterialInputs material) {
     color *= material.baseColor.a;
 #endif
 
-    return vec4(color, computeDiffuseAlpha(material.baseColor.a));
+    float alpha = computeDiffuseAlpha(material.baseColor.a);
+    return vec4(color, alpha);
 }
 
 vec3 emissive(const MaterialInputs material, float alpha) {
