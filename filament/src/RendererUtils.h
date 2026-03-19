@@ -77,6 +77,8 @@ public:
         bool isAutoDepthResolveSupported;
         // Use post-process fog
         bool fogAsPostProcess;
+        // Allocate an auxiliary diffuse + mask target for SSS.
+        bool hasSubsurfaceScattering;
     };
 
     struct ColorPassInput {
@@ -87,11 +89,13 @@ public:
         FrameGraphId<FrameGraphTexture> ssao;
         FrameGraphId<FrameGraphTexture> ssr;
         FrameGraphId<FrameGraphTexture> structure;
+        FrameGraphId<FrameGraphTexture> sssDiffuse;
     };
     struct ColorPassOutput {
         FrameGraphId<FrameGraphTexture> linearColor;
         FrameGraphId<FrameGraphTexture> tonemappedColor;
         FrameGraphId<FrameGraphTexture> depth;
+        FrameGraphId<FrameGraphTexture> sssDiffuse;
     };
 
     static ColorPassOutput colorPass(

@@ -1,0 +1,47 @@
+/**
+ * Evaluates lit materials with the Burley normalized diffusion subsurface scattering model.
+ *
+ * This model uses the Burley (Disney) normalized diffusion profile for subsurface scattering.
+ * The radially symmetric reflectance profile R(r) is:
+ *     R(r) = A * s / (8 * pi * r) * (exp(-s * r) + exp(-s * r / 3))
+ * where s = 1.0 / scatteringDistance, A = subsurfaceColor.
+ *
+ * The screen-space blur is handled in the post-processing pipeline (PostProcessManager).
+ * Keep the direct path close to regular diffuse + specular lighting and let the screen-space
+ * Burley pass form the visible scattering band. A baked-in wrap / forward-scatter approximation
+ * tends to pre-lift the shadow side and makes the final band much harder to read.
+ */
+vec3 surfaceShading(const PixelParams pixel, const Light light, float occlusion) {
+    g_sssMask = max(g_sssMask, max(pixel.subsurfaceColor.r,
+            max(pixel.subsurfaceColor.g, pixel.subsurfaceColor.b)));
+
+    vec3 h = normalize(shading_view + light.l);
+
+    float NoL = light.NoL;
+    float NoH = saturate(dot(shading_normal, h));
+    float LoH = saturate(dot(light.l, h));
+
+    vec3 Fr = vec3(0.0);
+    if (NoL > 0.0) {
+        // specular BRDF
+        float D = distribution(pixel.roughness, NoH, h);
+        float V = visibility(pixel.roughness, shading_NoV, NoL);
+        vec3  F = fresnel(pixel.f0, LoH);
+        Fr = (D * V) * F * pixel.energyCompensation;
+    }
+
+    // diffuse BRDF
+    vec3 Fd = pixel.diffuseColor * diffuse(pixel.roughness, shading_NoV, NoL, LoH);
+
+    // Apply NoL and occlusion to front-facing lighting
+    vec3 color = (Fd + Fr) * (NoL * occlusion);
+
+    vec3 result = (color * light.colorIntensity.rgb) * (light.colorIntensity.w * light.attenuation);
+
+    // Accumulate diffuse-only lighting for the screen-space SSS pass.
+    vec3 diffuseContrib = Fd * (NoL * occlusion);
+    diffuseContrib = (diffuseContrib * light.colorIntensity.rgb) * (light.colorIntensity.w * light.attenuation);
+    g_sssDiffuse += diffuseContrib;
+
+    return result;
+}

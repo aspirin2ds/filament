@@ -126,6 +126,14 @@ public:
             FrameGraphId<FrameGraphTexture> depth,
             AmbientOcclusionOptions const& options) noexcept;
 
+    // Screen-space subsurface scattering (Burley normalized diffusion)
+    FrameGraphId<FrameGraphTexture> subsurfaceScatteringBlur(FrameGraph& fg,
+            FrameGraphId<FrameGraphTexture> input,
+            FrameGraphId<FrameGraphTexture> diffuse,
+            FrameGraphId<FrameGraphTexture> depth,
+            const CameraInfo& cameraInfo,
+            SubsurfaceScatteringOptions const& options) noexcept;
+
     // Gaussian mipmap
     FrameGraphId<FrameGraphTexture> generateGaussianMipmap(FrameGraph& fg,
             FrameGraphId<FrameGraphTexture> input, size_t levels, bool reinhard,

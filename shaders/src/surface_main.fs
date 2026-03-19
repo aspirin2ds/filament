@@ -4,6 +4,12 @@ vec4 fragColor;
 layout(location = 0) out vec4 fragColor;
 #endif
 
+#if defined(SHADING_MODEL_SUBSURFACE_BURLEY)
+#if __VERSION__ != 100
+layout(location = 1) out vec4 fragColor1;
+#endif
+#endif
+
 #if defined(MATERIAL_HAS_POST_LIGHTING_COLOR)
 void blendPostLightingColor(const MaterialInputs material, inout vec4 color) {
     vec4 blend = color;
@@ -57,6 +63,14 @@ void main() {
     applyAlphaMask(inputs.baseColor);
 
     fragColor = evaluateMaterial(inputs);
+
+#if defined(SHADING_MODEL_SUBSURFACE_BURLEY)
+#if __VERSION__ == 100
+    gl_FragData[1] = vec4(g_sssDiffuse, saturate(g_sssMask));
+#else
+    fragColor1 = vec4(g_sssDiffuse, saturate(g_sssMask));
+#endif
+#endif
 
 #if defined(MATERIAL_HAS_POST_LIGHTING_COLOR) && !defined(MATERIAL_HAS_REFLECTIONS)
     blendPostLightingColor(inputs, fragColor);

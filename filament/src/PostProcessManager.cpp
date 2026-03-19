@@ -34,6 +34,7 @@
 #include "materials/fsr/fsr.h"
 #include "materials/sgsr/sgsr.h"
 #include "materials/ssao/ssao.h"
+#include "materials/sss/sss.h"
 
 #include "details/Engine.h"
 
@@ -394,6 +395,9 @@ void PostProcessManager::init() noexcept {
             registerPostProcessMaterial(info.name, info);
         }
         for (auto const& info: getSsaoMaterialList()) {
+            registerPostProcessMaterial(info.name, info);
+        }
+        for (auto const& info: getSssMaterialList()) {
             registerPostProcessMaterial(info.name, info);
         }
     }
@@ -1209,6 +1213,131 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::bilateralBlurPass(FrameGraph
             });
 
     return blurPass->blurred;
+}
+
+FrameGraphId<FrameGraphTexture> PostProcessManager::subsurfaceScatteringBlur(FrameGraph& fg,
+        FrameGraphId<FrameGraphTexture> input,
+        FrameGraphId<FrameGraphTexture> diffuse,
+        FrameGraphId<FrameGraphTexture> depth,
+        const CameraInfo& cameraInfo,
+        SubsurfaceScatteringOptions const& options) noexcept {
+
+    using namespace backend;
+
+    auto const& inputDesc = fg.getDescriptor(input);
+
+    // Compute projected scale: pixels per world unit at depth=1, per axis.
+    // Using the correct projection element for each axis ensures correct world-space
+    // distances on non-square viewports.
+    float const projectedScaleX = 0.5f * float(inputDesc.width) *
+            std::abs(cameraInfo.projection[0][0]);
+    float const projectedScaleY = 0.5f * float(inputDesc.height) *
+            std::abs(cameraInfo.projection[1][1]);
+    float const cameraFar = cameraInfo.zf;
+    float const scatteringDistance = options.scatteringDistance;
+    math::float3 const subsurfaceColor = options.subsurfaceColor;
+    int32_t const sampleCount = int32_t(options.sampleCount);
+    int32_t const debugMode = int32_t(options.debugMode);
+
+    // Horizontal pass
+    struct SSSBlurData {
+        FrameGraphId<FrameGraphTexture> input;
+        FrameGraphId<FrameGraphTexture> diffuse;
+        FrameGraphId<FrameGraphTexture> setupDiffuse;
+        FrameGraphId<FrameGraphTexture> depth;
+        FrameGraphId<FrameGraphTexture> output;
+    };
+
+    auto sssBlurPass = [&](FrameGraph& fg, FrameGraphId<FrameGraphTexture> colorInput,
+            FrameGraphId<FrameGraphTexture> diffuseInput,
+            FrameGraphId<FrameGraphTexture> setupDiffuseInput,
+            FrameGraphId<FrameGraphTexture> depthInput,
+            math::float2 axis, float projectedScale, int32_t passIndex, int32_t passDebugMode,
+            const char* passName)
+            -> FrameGraphId<FrameGraphTexture> {
+
+        auto const& desc = fg.getDescriptor(colorInput);
+
+        auto& pass = fg.addPass<SSSBlurData>(passName,
+                [&](FrameGraph::Builder& builder, auto& data) {
+                    data.input = builder.sample(colorInput);
+                    data.diffuse = builder.sample(diffuseInput);
+                    data.setupDiffuse = builder.sample(setupDiffuseInput);
+                    data.depth = builder.sample(depthInput);
+
+                    data.output = builder.createTexture("SSS Blurred", {
+                            .width = desc.width,
+                            .height = desc.height,
+                            .format = desc.format });
+                    data.output = builder.write(data.output,
+                            FrameGraphTexture::Usage::COLOR_ATTACHMENT);
+
+                    builder.declareRenderPass("SSS Blur Target", {
+                            .attachments = { .color = { data.output } },
+                            .clearFlags = TargetBufferFlags::NONE
+                    });
+                },
+                [=, this](FrameGraphResources const& resources,
+                        auto const& data, DriverApi& driver) {
+                    bindPostProcessDescriptorSet(driver);
+                    bindPerRenderableDescriptorSet(driver);
+
+                    auto colorTex = resources.getTexture(data.input);
+                    auto diffuseTex = resources.getTexture(data.diffuse);
+                    auto setupDiffuseTex = resources.getTexture(data.setupDiffuse);
+                    auto depthTex = resources.getTexture(data.depth);
+                    auto out = resources.getRenderPassInfo();
+                    auto const& outDesc = resources.getDescriptor(data.output);
+
+                    auto& material = getPostProcessMaterial("sssBlur");
+                    FMaterial const* const ma = material.getMaterial(mEngine, driver);
+                    FMaterialInstance* const mi = getMaterialInstance(ma);
+
+                    mi->setParameter("color", colorTex, {
+                            .filterMag = SamplerMagFilter::LINEAR,
+                            .filterMin = SamplerMinFilter::LINEAR_MIPMAP_NEAREST
+                    });
+                    mi->setParameter("diffuse", diffuseTex, {
+                            .filterMag = SamplerMagFilter::LINEAR,
+                            .filterMin = SamplerMinFilter::LINEAR_MIPMAP_NEAREST
+                    });
+                    mi->setParameter("setupDiffuse", setupDiffuseTex, {
+                            .filterMag = SamplerMagFilter::LINEAR,
+                            .filterMin = SamplerMinFilter::LINEAR_MIPMAP_NEAREST
+                    });
+                    mi->setParameter("depth", depthTex, {});
+                    mi->setParameter("axis", axis);
+                    mi->setParameter("resolution",
+                            math::float4{ float(outDesc.width), float(outDesc.height),
+                                    1.0f / float(outDesc.width), 1.0f / float(outDesc.height) });
+                    mi->setParameter("scatteringDistance", scatteringDistance);
+                    mi->setParameter("subsurfaceColor", subsurfaceColor);
+                    mi->setParameter("sampleCount", sampleCount);
+                    mi->setParameter("projectedScale", projectedScale);
+                    mi->setParameter("cameraFar", cameraFar);
+                    mi->setParameter("debugMode", passDebugMode);
+                    mi->setParameter("passIndex", passIndex);
+
+                    mi->commit(driver, getUboManager());
+                    mi->use(driver);
+
+                    auto pipeline = getPipelineState(ma);
+                    renderFullScreenQuad(out, pipeline, driver);
+                    unbindAllDescriptorSets(driver);
+                });
+
+        return pass->output;
+    };
+
+    // Execute horizontal then vertical blur with per-axis projected scale
+    auto intermediate = sssBlurPass(
+            fg, input, diffuse, diffuse, depth, { 1.0f, 0.0f }, projectedScaleX,
+            0, 0, "SSS Blur H");
+    auto output = sssBlurPass(
+            fg, input, intermediate, diffuse, depth, { 0.0f, 1.0f }, projectedScaleY,
+            1, debugMode, "SSS Blur V");
+
+    return output;
 }
 
 FrameGraphId<FrameGraphTexture> PostProcessManager::generateGaussianMipmap(FrameGraph& fg,

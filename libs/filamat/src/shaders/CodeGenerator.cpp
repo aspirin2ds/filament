@@ -273,6 +273,7 @@ utils::io::sstream& CodeGenerator::generateCommonProlog(utils::io::sstream& out,
             case Shading::SUBSURFACE:          return "SHADING_MODEL_SUBSURFACE";
             case Shading::CLOTH:               return "SHADING_MODEL_CLOTH";
             case Shading::SPECULAR_GLOSSINESS: return "SHADING_MODEL_SPECULAR_GLOSSINESS";
+            case Shading::SUBSURFACE_BURLEY:  return "SHADING_MODEL_SUBSURFACE_BURLEY";
         }
     };
 
@@ -1184,6 +1185,9 @@ io::sstream& CodeGenerator::generateSurfaceLit(io::sstream& out, ShaderStage sta
             case Shading::SUBSURFACE:
                 out << SHADERS_SURFACE_SHADING_MODEL_SUBSURFACE_FS_DATA;
                 break;
+            case Shading::SUBSURFACE_BURLEY:
+                out << SHADERS_SURFACE_SHADING_MODEL_SUBSURFACE_BURLEY_FS_DATA;
+                break;
             case Shading::CLOTH:
                 out << SHADERS_SURFACE_SHADING_MODEL_CLOTH_FS_DATA;
                 break;
@@ -1262,6 +1266,7 @@ char const* CodeGenerator::getConstantName(MaterialBuilder::Property property) n
         case Property::SPECULAR_FACTOR:             return "SPECULAR_FACTOR";
         case Property::SPECULAR_COLOR_FACTOR:       return "SPECULAR_COLOR_FACTOR";
         case Property::SHADOW_STRENGTH:             return "SHADOW_STRENGTH";
+        case Property::SCATTERING_DISTANCE:         return "SCATTERING_DISTANCE";
     }
 }
 

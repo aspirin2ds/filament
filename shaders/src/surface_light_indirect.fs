@@ -381,7 +381,7 @@ void evaluateClothIndirectDiffuseBRDF(const PixelParams pixel, inout float diffu
 
 void evaluateSheenIBL(const PixelParams pixel, float diffuseAO,
         const in SSAOInterpolationCache cache, inout vec3 Fd, inout vec3 Fr) {
-#if !defined(SHADING_MODEL_CLOTH) && !defined(SHADING_MODEL_SUBSURFACE)
+#if !defined(SHADING_MODEL_CLOTH) && !defined(SHADING_MODEL_SUBSURFACE) && !defined(SHADING_MODEL_SUBSURFACE_BURLEY)
 #if defined(MATERIAL_HAS_SHEEN_COLOR)
     // Albedo scaling of the base layer before we layer sheen on top
     Fd *= pixel.sheenScaling;
@@ -431,6 +431,14 @@ void evaluateClearCoatIBL(const PixelParams pixel, float diffuseAO,
 void evaluateSubsurfaceIBL(const PixelParams pixel, const vec3 diffuseIrradiance,
         inout vec3 Fd, inout vec3 Fr) {
 #if defined(SHADING_MODEL_SUBSURFACE)
+    vec3 viewIndependent = diffuseIrradiance;
+    vec3 viewDependent = prefilteredRadiance(-shading_view, pixel.roughness, 1.0 + pixel.thickness);
+    float attenuation = (1.0 - pixel.thickness) / (2.0 * PI);
+    Fd += pixel.subsurfaceColor * (viewIndependent + viewDependent) * attenuation;
+#elif defined(SHADING_MODEL_SUBSURFACE_BURLEY)
+    // Burley normalized diffusion: use scatteringDistance to modulate IBL contribution.
+    // The screen-space blur handles the primary diffusion; this adds a view-dependent
+    // back-scatter term from the IBL similar to the existing subsurface model.
     vec3 viewIndependent = diffuseIrradiance;
     vec3 viewDependent = prefilteredRadiance(-shading_view, pixel.roughness, 1.0 + pixel.thickness);
     float attenuation = (1.0 - pixel.thickness) / (2.0 * PI);
@@ -814,6 +822,9 @@ void evaluateIBL(const MaterialInputs material, const PixelParams pixel, inout v
 
     // Combine all terms
     // Note: iblLuminance is already premultiplied by the exposure
+#if defined(SHADING_MODEL_SUBSURFACE_BURLEY)
+    g_sssDiffuse += Fd;
+#endif
     color.rgb += Fr + Fd;
 #if defined(MATERIAL_HAS_REFRACTION)
     color.rgb += Ft;

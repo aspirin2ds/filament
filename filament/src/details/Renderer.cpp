@@ -705,6 +705,7 @@ void FRenderer::renderJob(DriverApi& driver, RootArenaScope& rootArenaScope, FVi
     auto vignetteOptions = view.getVignetteOptions();
     auto colorGrading = view.getColorGrading();
     auto ssReflectionsOptions = view.getScreenSpaceReflectionsOptions();
+    auto sssOptions = view.getSubsurfaceScatteringOptions();
     auto guardBandOptions = view.getGuardBandOptions();
     const bool isRenderingMultiview = view.hasStereo() &&
             engine.getConfig().stereoscopicType == StereoscopicType::MULTIVIEW;
@@ -784,6 +785,14 @@ void FRenderer::renderJob(DriverApi& driver, RootArenaScope& rootArenaScope, FVi
 
     // by construction (msaaSampleCount) both asSubpass and customResolve can't be true
     assert_invariant(colorGradingConfig.asSubpass + colorGradingConfig.customResolve < 2);
+
+    // color-grading as subpass is done either by the color pass or the TAA pass if any.
+    auto colorGradingConfigForColor = colorGradingConfig;
+    colorGradingConfigForColor.asSubpass = colorGradingConfigForColor.asSubpass && !taaOptions.enabled;
+    if (sssOptions.enabled) {
+        colorGradingConfigForColor.asSubpass = false;
+        colorGradingConfigForColor.customResolve = false;
+    }
 
     // vp is the user defined viewport within the View
     filament::Viewport const& vp = view.getViewport();
@@ -1027,7 +1036,13 @@ void FRenderer::renderJob(DriverApi& driver, RootArenaScope& rootArenaScope, FVi
             .keepOverrideEnd = keepOverrideEndFlags
     }, viewRenderTarget);
 
-    const TextureFormat hdrFormat = getHdrFormat(view, needsAlphaChannel);
+    TextureFormat hdrFormat = getHdrFormat(view, needsAlphaChannel);
+
+    // SSS Burley needs RGBA so we can keep the main color buffer sampleable while emitting
+    // a diffuse+mask auxiliary MRT during the color pass.
+    if (sssOptions.enabled) {
+        hdrFormat = TextureFormat::RGBA16F;
+    }
 
     // the clearFlags and clearColor specified below will only apply when rendering into the
     // temporary color buffer. In particular, they won't apply when rendering into the main
@@ -1048,6 +1063,7 @@ void FRenderer::renderJob(DriverApi& driver, RootArenaScope& rootArenaScope, FVi
             .featureLevel = mFeatureLevel,
             .isAutoDepthResolveSupported = mIsAutoDepthResolveSupported,
             .fogAsPostProcess = view.hasFog() && engine.features.material.enable_fog_as_postprocess,
+            .hasSubsurfaceScattering = sssOptions.enabled,
     };
 
     /*
@@ -1158,11 +1174,11 @@ void FRenderer::renderJob(DriverApi& driver, RootArenaScope& rootArenaScope, FVi
             },
             [=, &js, &view, &ppm](auto&, auto&, DriverApi& driver) {
                 // prepare color grading as subpass material
-                if (colorGradingConfig.asSubpass) {
+                if (colorGradingConfigForColor.asSubpass) {
                     ppm.colorGradingPrepareSubpass(driver,
-                            colorGrading, colorGradingConfig, vignetteOptions,
+                            colorGrading, colorGradingConfigForColor, vignetteOptions,
                             colorBufferDesc.width, colorBufferDesc.height);
-                } else if (colorGradingConfig.customResolve) {
+                } else if (colorGradingConfigForColor.customResolve) {
                     ppm.customResolvePrepareSubpass(driver,
                             PostProcessManager::CustomResolveOp::COMPRESS);
                 }
@@ -1211,10 +1227,6 @@ void FRenderer::renderJob(DriverApi& driver, RootArenaScope& rootArenaScope, FVi
             });
     });
 
-    // color-grading as subpass is done either by the color pass or the TAA pass if any
-    auto colorGradingConfigForColor = colorGradingConfig;
-    colorGradingConfigForColor.asSubpass = colorGradingConfigForColor.asSubpass && !taaOptions.enabled;
-
     if (config.fogAsPostProcess) {
         // append for command at the end of the opaque pass
 
@@ -1238,7 +1250,7 @@ void FRenderer::renderJob(DriverApi& driver, RootArenaScope& rootArenaScope, FVi
                 0, [&ppm, &driver, colorGradingConfigForColor] {
                     ppm.colorGradingSubpass(driver, colorGradingConfigForColor);
                 });
-    } else if (colorGradingConfig.customResolve) {
+    } else if (colorGradingConfigForColor.customResolve) {
         // append custom resolve subpass after all other passes
         passBuilder.customCommand(CONFIG_RENDERPASS_CHANNEL_COUNT - 1,
                 RenderPass::Pass::BLENDED,
@@ -1310,7 +1322,7 @@ void FRenderer::renderJob(DriverApi& driver, RootArenaScope& rootArenaScope, FVi
              pass, firstRefractionCommand);
     }
 
-    if (colorGradingConfig.customResolve) {
+    if (colorGradingConfigForColor.customResolve) {
         assert_invariant(fg.getDescriptor(colorPassOutput.linearColor).samples <= 1);
         // TODO: we have to "uncompress" (i.e. detonemap) the color buffer here because it's used
         //       by many other passes (Bloom, TAA, DoF, etc...). We could make this more
@@ -1346,7 +1358,7 @@ void FRenderer::renderJob(DriverApi& driver, RootArenaScope& rootArenaScope, FVi
 
     // this is the output of the color pass / input to post processing,
     // this is only used later for comparing it with the output after post-processing
-    FrameGraphId<FrameGraphTexture> const postProcessInput = colorGradingConfig.asSubpass ?
+    FrameGraphId<FrameGraphTexture> const postProcessInput = colorGradingConfigForColor.asSubpass ?
                                                              colorPassOutput.tonemappedColor :
                                                              colorPassOutput.linearColor;
 
@@ -1363,6 +1375,13 @@ void FRenderer::renderJob(DriverApi& driver, RootArenaScope& rootArenaScope, FVi
     if (UTILS_UNLIKELY(engine.debug.shadowmap.visualize_cascades &&
                        view.hasShadowing() && view.hasDirectionalLighting())) {
         input = ppm.debugShadowCascades(fg, view.getShadowMapManager(), input, depth);
+    }
+
+    // Screen-space subsurface scattering blur (Burley normalized diffusion).
+    // Applied before TAA so the stochastic noise can be resolved by the temporal filter.
+    if (sssOptions.enabled) {
+        input = ppm.subsurfaceScatteringBlur(
+                fg, input, colorPassOutput.sssDiffuse, depth, cameraInfo, sssOptions);
     }
 
     // TODO: DoF should be applied here, before TAA -- but if we do this it'll result in a lot of
@@ -1428,10 +1447,10 @@ void FRenderer::renderJob(DriverApi& driver, RootArenaScope& rootArenaScope, FVi
         }
 
         if (hasColorGrading) {
-            if (!colorGradingConfig.asSubpass) {
+            if (!colorGradingConfigForColor.asSubpass) {
                 input = ppm.colorGrading(fg, input, xvp,
                         bloom, flare,
-                        colorGrading, colorGradingConfig,
+                        colorGrading, colorGradingConfigForColor,
                         bloomOptions, vignetteOptions);
                 // the padded buffer is resolved now
                 xvp.left = xvp.bottom = 0;
@@ -1526,7 +1545,7 @@ void FRenderer::renderJob(DriverApi& driver, RootArenaScope& rootArenaScope, FVi
             xvp != svp ||
             (inputIsColorPass &&
                     (msaaSampleCount > 1 ||
-                    colorGradingConfig.asSubpass ||
+                    colorGradingConfigForColor.asSubpass ||
                     hasScreenSpaceRefraction ||
                     ssReflectionsOptions.enabled))) {
             input = ppm.blit(fg, blendModeTranslucent, input, xvp, {

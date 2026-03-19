@@ -91,6 +91,7 @@ public:
     using ScreenSpaceReflectionsOptions = filament::ScreenSpaceReflectionsOptions;
     using GuardBandOptions = filament::GuardBandOptions;
     using StereoscopicOptions = filament::StereoscopicOptions;
+    using SubsurfaceScatteringOptions = filament::SubsurfaceScatteringOptions;
 
     /**
      * Sets the View's name. Only useful for debugging.
@@ -393,6 +394,21 @@ public:
      * @return screen-space reflections options
      */
     ScreenSpaceReflectionsOptions const& getScreenSpaceReflectionsOptions() const noexcept;
+
+    /**
+     * Sets screen-space subsurface scattering options.
+     *
+     * @param options SSS options
+     * @see SubsurfaceScatteringOptions
+     */
+    void setSubsurfaceScatteringOptions(SubsurfaceScatteringOptions options) noexcept;
+
+    /**
+     * Returns screen-space subsurface scattering options.
+     *
+     * @return SSS options
+     */
+    SubsurfaceScatteringOptions const& getSubsurfaceScatteringOptions() const noexcept;
 
     /**
      * Enables or disable screen-space guard band. Disabled by default.

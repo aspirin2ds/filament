@@ -49,12 +49,16 @@ struct PixelParams {
     float anisotropy;
 #endif
 
-#if defined(SHADING_MODEL_SUBSURFACE) || defined(MATERIAL_HAS_REFRACTION)
+#if defined(SHADING_MODEL_SUBSURFACE) || defined(SHADING_MODEL_SUBSURFACE_BURLEY) || defined(MATERIAL_HAS_REFRACTION)
     float thickness;
 #endif
 #if defined(SHADING_MODEL_SUBSURFACE)
     vec3  subsurfaceColor;
     float subsurfacePower;
+#endif
+#if defined(SHADING_MODEL_SUBSURFACE_BURLEY)
+    vec3  subsurfaceColor;
+    float scatteringDistance;
 #endif
 
 #if defined(SHADING_MODEL_CLOTH) && defined(MATERIAL_HAS_SUBSURFACE_COLOR)
@@ -72,6 +76,11 @@ struct PixelParams {
     vec3  absorption;
 #endif
 };
+
+#if defined(SHADING_MODEL_SUBSURFACE_BURLEY)
+vec3 g_sssDiffuse = vec3(0.0);
+float g_sssMask = 0.0;
+#endif
 
 float computeMicroShadowing(float NoL, float visibility) {
     // Chan 2018, "Material Advances in Call of Duty: WWII"

@@ -3,7 +3,7 @@
 #if !defined(MATERIAL_HAS_SUBSURFACE_COLOR)
     #define MATERIAL_CAN_SKIP_LIGHTING
 #endif
-#elif defined(SHADING_MODEL_SUBSURFACE) || defined(MATERIAL_HAS_CUSTOM_SURFACE_SHADING)
+#elif defined(SHADING_MODEL_SUBSURFACE) || defined(SHADING_MODEL_SUBSURFACE_BURLEY) || defined(MATERIAL_HAS_CUSTOM_SURFACE_SHADING)
     // Cannot skip lighting
 #else
     #define MATERIAL_CAN_SKIP_LIGHTING
@@ -23,7 +23,7 @@ struct MaterialInputs {
 #endif
     vec4  emissive;
 
-#if !defined(SHADING_MODEL_CLOTH) && !defined(SHADING_MODEL_SUBSURFACE) && !defined(SHADING_MODEL_UNLIT)
+#if !defined(SHADING_MODEL_CLOTH) && !defined(SHADING_MODEL_SUBSURFACE) && !defined(SHADING_MODEL_SUBSURFACE_BURLEY) && !defined(SHADING_MODEL_UNLIT)
     vec3 sheenColor;
     float sheenRoughness;
 #endif
@@ -34,12 +34,16 @@ struct MaterialInputs {
     float anisotropy;
     vec3  anisotropyDirection;
 
-#if defined(SHADING_MODEL_SUBSURFACE) || defined(MATERIAL_HAS_REFRACTION)
+#if defined(SHADING_MODEL_SUBSURFACE) || defined(SHADING_MODEL_SUBSURFACE_BURLEY) || defined(MATERIAL_HAS_REFRACTION)
     float thickness;
 #endif
 #if defined(SHADING_MODEL_SUBSURFACE)
     float subsurfacePower;
     vec3  subsurfaceColor;
+#endif
+#if defined(SHADING_MODEL_SUBSURFACE_BURLEY)
+    vec3  subsurfaceColor;
+    float scatteringDistance;
 #endif
 
 #if defined(SHADING_MODEL_CLOTH)
@@ -69,7 +73,7 @@ struct MaterialInputs {
     float postLightingMixFactor;
 #endif
 
-#if !defined(SHADING_MODEL_CLOTH) && !defined(SHADING_MODEL_SUBSURFACE) && !defined(SHADING_MODEL_UNLIT)
+#if !defined(SHADING_MODEL_CLOTH) && !defined(SHADING_MODEL_SUBSURFACE) && !defined(SHADING_MODEL_SUBSURFACE_BURLEY) && !defined(SHADING_MODEL_UNLIT)
 #if defined(MATERIAL_HAS_REFRACTION)
 #if defined(MATERIAL_HAS_ABSORPTION)
     vec3 absorption;
@@ -121,7 +125,7 @@ void initMaterial(out MaterialInputs material) {
 #endif
     material.emissive = vec4(vec3(0.0), 1.0);
 
-#if !defined(SHADING_MODEL_CLOTH) && !defined(SHADING_MODEL_SUBSURFACE) && !defined(SHADING_MODEL_UNLIT)
+#if !defined(SHADING_MODEL_CLOTH) && !defined(SHADING_MODEL_SUBSURFACE) && !defined(SHADING_MODEL_SUBSURFACE_BURLEY) && !defined(SHADING_MODEL_UNLIT)
 #if defined(MATERIAL_HAS_SHEEN_COLOR)
     material.sheenColor = vec3(0.0);
     material.sheenRoughness = 0.0;
@@ -138,12 +142,16 @@ void initMaterial(out MaterialInputs material) {
     material.anisotropyDirection = vec3(1.0, 0.0, 0.0);
 #endif
 
-#if defined(SHADING_MODEL_SUBSURFACE) || defined(MATERIAL_HAS_REFRACTION)
+#if defined(SHADING_MODEL_SUBSURFACE) || defined(SHADING_MODEL_SUBSURFACE_BURLEY) || defined(MATERIAL_HAS_REFRACTION)
     material.thickness = 0.5;
 #endif
 #if defined(SHADING_MODEL_SUBSURFACE)
     material.subsurfacePower = 12.234;
     material.subsurfaceColor = vec3(1.0);
+#endif
+#if defined(SHADING_MODEL_SUBSURFACE_BURLEY)
+    material.subsurfaceColor = vec3(1.0);
+    material.scatteringDistance = 1.0;
 #endif
 
 #if defined(SHADING_MODEL_CLOTH)
@@ -173,7 +181,7 @@ void initMaterial(out MaterialInputs material) {
     material.postLightingMixFactor = 1.0;
 #endif
 
-#if !defined(SHADING_MODEL_CLOTH) && !defined(SHADING_MODEL_SUBSURFACE) && !defined(SHADING_MODEL_UNLIT)
+#if !defined(SHADING_MODEL_CLOTH) && !defined(SHADING_MODEL_SUBSURFACE) && !defined(SHADING_MODEL_SUBSURFACE_BURLEY) && !defined(SHADING_MODEL_UNLIT)
 #if defined(MATERIAL_HAS_REFRACTION)
 #if defined(MATERIAL_HAS_ABSORPTION)
     material.absorption = vec3(0.0);
