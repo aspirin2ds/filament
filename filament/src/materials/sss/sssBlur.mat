@@ -149,6 +149,23 @@ fragment {
         return vec3(3.5) + 100.0 * value * value * value * value;
     }
 
+    vec3 getPerpendicularScalingFactor3D(vec3 surfaceAlbedo) {
+        vec3 value = abs(surfaceAlbedo - vec3(0.8));
+        return vec3(1.85) - surfaceAlbedo + 7.0 * value * value * value;
+    }
+
+    vec3 getMfpFromDmfpApprox(vec3 surfaceAlbedo, vec3 dmfp) {
+        return 0.6 * getPerpendicularScalingFactor3D(surfaceAlbedo) /
+                getSearchLightDiffuseScalingFactor3D(surfaceAlbedo) * dmfp;
+    }
+
+    float dominantDistanceChannel(vec3 values, vec3 distances) {
+        if (distances.r >= distances.g && distances.r >= distances.b) {
+            return values.r;
+        }
+        return distances.g >= distances.b ? values.g : values.b;
+    }
+
     /**
      * Bilateral depth weight: suppress contributions from pixels at different depths
      * to prevent light leaking across depth discontinuities.
@@ -235,7 +252,8 @@ fragment {
             if (!recombinePass) {
                 postProcess.color = centerSetupData;
             } else {
-                postProcess.color = materialParams.debugMode != 0 ? vec4(0.0, 0.0, 0.0, 1.0) : centerColor;
+                postProcess.color = materialParams.debugMode != 0 ?
+                        vec4(0.0, 0.0, 0.0, 1.0) : centerColor;
             }
             return;
         }
@@ -254,13 +272,19 @@ fragment {
         float scaledSd = sd * materialParams.worldUnitScale;
         vec3 centerDmfp = max(centerTint * scaledSd, vec3(0.001));
         vec3 centerD = centerDmfp / getSearchLightDiffuseScalingFactor3D(centerAlbedo);
-        float supportRadius = max(centerDmfp.r, max(centerDmfp.g, centerDmfp.b));
+        vec3 centerMfp = max(getMfpFromDmfpApprox(centerAlbedo, centerDmfp), vec3(0.001));
+        float supportRadius = max(centerMfp.r, max(centerMfp.g, centerMfp.b));
+        float dominantDmfp = dominantDistanceChannel(centerDmfp, centerDmfp);
+        float dominantAlbedo = dominantDistanceChannel(centerAlbedo, centerDmfp);
+        float dominantD = dominantDmfp / max(
+                getSearchLightDiffuseScalingFactor3D(vec3(dominantAlbedo)).r, 1e-4);
 
         // Use the per-pixel scattering radius and keep view options as a global multiplier.
         float pixelScale = materialParams.projectedScale / centerDepth;
-        float effectiveRadiusPixels = max(supportRadius * pixelScale * 0.5, 1.0);
+        float effectiveRadiusPixels = max(supportRadius * pixelScale, 1.0);
         float centerSampleRadius = 1.0 / max(pixelScale, 1e-4);
-        vec3 centerSampleCdf = saturate(getCDF3D(centerD, centerSampleRadius));
+        float centerSampleCdf = saturate(getCDF3D(vec3(max(dominantD, 1e-4)),
+                centerSampleRadius).r);
 
         float depthThreshold = supportRadius * 2.0;
 
@@ -312,7 +336,6 @@ fragment {
             totalWeight += wN;
         }
 
-        // Normalized blurred diffuse
         vec3 blurredDiffuse = totalDiffuse / max(totalWeight, vec3(1e-4));
         if (!recombinePass) {
             postProcess.color = vec4(blurredDiffuse, centerMask);
@@ -333,9 +356,8 @@ fragment {
             return;
         }
 
-        float scatterAmount = smoothstep(0.01, 0.35, supportRadius) * centerMask;
+        float scatterAmount = smoothstep(0.005, 0.20, supportRadius) * centerMask;
         float faceBoost = smoothstep(0.22, 0.88, NoV);
-        float bandStrength = scatterAmount * mix(0.75, 1.10, faceBoost);
         vec3 lowFrequencyDiffuse = blurredDiffuse;
         vec3 highFrequencyResidual = max(centerSetupLighting - blurredDiffuse, vec3(0.0));
 
@@ -348,20 +370,17 @@ fragment {
 
         float terminatorAnchor = 1.0 - smoothstep(0.0, mix(0.32, 0.50, NoV), abs(rawNoL));
         float shadowSupport = 1.0 - smoothstep(-0.12, 0.20, rawNoL);
-        float backscatterSupport = smoothstep(0.02, 0.55, -rawNoL);
         float litFalloff = 1.0 - smoothstep(0.04, mix(0.14, 0.24, NoV), rawNoL);
         float silhouetteSuppression = smoothstep(0.02, 0.18, NoV);
         float terminatorWindow = saturate(terminatorAnchor * litFalloff * silhouetteSuppression);
-        float bandPresence = saturate((0.80 * terminatorAnchor + 0.20 * shadowSupport) *
-                litFalloff * silhouetteSuppression);
+        float bandPresence = saturate(scatterAmount * (1.0 - centerSampleCdf) *
+                silhouetteSuppression * max(terminatorAnchor, shadowSupport));
 
-        float supportLerp = saturate(
-                (0.75 * terminatorAnchor + 0.15 * shadowSupport + 0.10 * backscatterSupport) *
-                litFalloff * silhouetteSuppression);
         float detailGate = smoothstep(0.0003, 0.008, baseDeltaMagnitude);
-        vec3 profileLerp = scatterAmount * (vec3(1.0) - centerSampleCdf) * detailGate;
-        vec3 heuristicFloor = vec3(bandPresence * scatterAmount * 0.55 * supportLerp);
-        vec3 fadedTint = saturate(centerTint * max(profileLerp, heuristicFloor));
+        float lerpFactor = saturate(scatterAmount * (1.0 - centerSampleCdf) * detailGate);
+        lerpFactor *= mix(0.85, 1.10, faceBoost);
+        lerpFactor *= mix(0.75, 1.0, silhouetteSuppression);
+        vec3 fadedTint = saturate(centerTint * lerpFactor);
         vec3 finalScatterLighting = mix(centerSetupLighting, blurredDiffuse, fadedTint);
 
         float influenceMask = max3(fadedTint);
@@ -394,30 +413,27 @@ fragment {
         }
 
         // Thin-region transmission is a distinct backlit contribution layered on top of the
-        // laterally scattered diffuse. The lack of a thickness texture means we approximate it
-        // from the material thickness plus geometric silhouette and backlighting.
+        // laterally scattered diffuse.
         float silhouette = pow(1.0 - NoV, 3.5);
-        // Blend between a depth-derived geometric normal and the full stored shading normal so
-        // the control has a meaningful range even when the material normal detail is subtle.
-        float transmissionBlend = sqrt(materialParams.normalScale);
-        highp vec3 transmissionNormal = normalize(mix(centerGeometricNormal, centerNormal,
-                transmissionBlend));
-        float transmissionNoL = dot(transmissionNormal, lightDirView);
-        float distributionBias = mix(0.02, 0.20, materialParams.scatteringDistribution);
-        float distributionRange = mix(0.45, 0.90, materialParams.scatteringDistribution);
-        float backlight = smoothstep(distributionBias, distributionRange, -transmissionNoL);
+        // Keep the light-facing center mostly geometric and let normalScale add detail rather than
+        // steering the whole lobe.
+        float macroTransmissionNoL = dot(centerGeometricNormal, lightDirView);
+        float detailTransmissionNoL = dot(centerNormal, lightDirView);
+        float transmissionBlend = 0.35 * sqrt(materialParams.normalScale);
+        float transmissionNoL = mix(macroTransmissionNoL, detailTransmissionNoL, transmissionBlend);
+        float distribution = materialParams.scatteringDistribution * 2.0 - 1.0;
+        float phase01 = saturate(distribution * 0.5 + 0.5);
+        float phaseBias = mix(0.10, -0.08, phase01);
+        float phaseScale = mix(1.35, 2.25, phase01);
+        float backlight = saturate((-transmissionNoL + phaseBias) * phaseScale);
+        backlight *= backlight;
         float thinRegion = 1.0 - centerThickness;
         float transmissionStrength = backlight * silhouette * thinRegion * centerMask;
-        transmissionStrength *= smoothstep(0.05, 0.35, supportRadius);
+        transmissionStrength *= smoothstep(0.03, 0.20, supportRadius);
         transmissionStrength *= 0.35 + 0.65 * (1.0 - edgeAttenuation);
-        // Approximate the stronger internal bending from higher-IOR media until the
-        // transmission path carries a richer profile payload.
         float oneOverIor = 1.0 / max(materialParams.ior, 1.0);
-        float iorInfluence = saturate((1.0 - oneOverIor) * 1.5);
-        transmissionStrength *= mix(0.35, 1.0, iorInfluence);
-        // Keep extinction responsive even in the thin regions where transmission is most visible
-        // by using a minimum optical path length instead of letting the attenuation collapse to 1.
-        float opticalPath = mix(0.15, 1.0, centerThickness) * max(supportRadius, 0.001);
+        transmissionStrength *= saturate(1.15 - oneOverIor);
+        float opticalPath = mix(0.10, 1.25, centerThickness) * max(supportRadius, 0.001);
         float transmissionAttenuation = exp(-materialParams.extinctionScale * opticalPath);
         transmissionStrength *= transmissionAttenuation;
         vec3 transmissionTint = centerTint * materialParams.transmissionTintColor;
