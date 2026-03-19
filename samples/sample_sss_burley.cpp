@@ -612,8 +612,8 @@ void writeComparisonMetadata(App const& app, View const* view) {
     out << "  \"meanFreePathColor\": " << vectorToJson(app.meanFreePathColor) << ",\n";
     out << "  \"meanFreePathDistance\": " << app.meanFreePathDistance << ",\n";
     out << "  \"worldUnitScale\": " << app.worldUnitScale << ",\n";
-    out << "  \"viewScatteringDistanceMultiplier\": " << app.scatteringDistance << ",\n";
-    out << "  \"viewSubsurfaceColorMultiplier\": " << vectorToJson(app.subsurfaceColor) << ",\n";
+    out << "  \"viewScatteringDistanceMultiplier\": 1.0,\n";
+    out << "  \"viewSubsurfaceColorMultiplier\": " << vectorToJson(float3{1.0f, 1.0f, 1.0f}) << ",\n";
     out << "  \"tint\": " << vectorToJson(app.tint) << ",\n";
     out << "  \"boundaryColorBleed\": " << vectorToJson(app.boundaryColorBleed) << ",\n";
     out << "  \"extinctionScale\": " << app.extinctionScale << ",\n";
@@ -642,13 +642,14 @@ void writeComparisonReport(App const& app) {
     out << "## Parameter Mapping\n\n";
     out << "| Unreal Burley term | Filament current mapping | Status |\n";
     out << "| --- | --- | --- |\n";
-    out << "| Surface Albedo | `baseColor` material parameter | Approximate |\n";
-    out << "| Mean Free Path Color | material `subsurfaceColor`, with view color acting as a multiplier/default | Approximate |\n";
-    out << "| Mean Free Path Distance | material `scatteringDistance`, with view distance acting as a multiplier/default | Approximate |\n";
-    out << "| World Unit Scale | folded into the authored/sample scattering distance | Approximate |\n";
-    out << "| Tint | per-pixel Burley params target | Implemented |\n";
-    out << "| Boundary Color Bleed | tracked in sample metadata only | Missing in engine |\n";
-    out << "| Transmission block | separate thin-region transmission lift driven by thickness and Burley tint | Approximate |\n";
+    out << "| Surface Albedo | stored in `sssAlbedo` for lighting-space recombine | Implemented |\n";
+    out << "| Mean Free Path Color | material `subsurfaceColor` authored per pixel | Approximate |\n";
+    out << "| Mean Free Path Distance | material `scatteringDistance` authored per pixel | Approximate |\n";
+    out << "| World Unit Scale | view-level Burley radius calibration | Implemented |\n";
+    out << "| Tint | fixed white in current sample flow | Not an active parity lever |\n";
+    out << "| Boundary Color Bleed | fixed white in current sample flow; not consumed by engine | Missing in engine |\n";
+    out << "| Transmission Tint Color | fixed white in current sample flow | Not an active parity lever |\n";
+    out << "| Transmission block | separate thin-region transmission lift driven by thickness, IOR, and current Burley scale | Approximate |\n";
     out << "| Dual Specular | untouched default lit specular path | Missing |\n\n";
 
     out << "## Artifact Grid\n\n";
@@ -669,9 +670,8 @@ void writeComparisonReport(App const& app) {
             << row.rootCause << " | " << row.fixPlan << " |\n";
     }
     out << "\n## Next Action\n\n";
-    out << "Validate the new per-pixel Burley payload on mixed-material scenes, then decide "
-           "whether profile ids, boundary color bleed, or richer transmission controls are the "
-           "next highest-value parity step.\n";
+    out << "Tighten the Burley scale and `LerpFactor` calibration against the Unreal Burley "
+           "profile screenshot before adding profile ids or dual-spec complexity.\n";
 }
 
 void applyViewpoint(App& app) {
@@ -706,8 +706,8 @@ void applyViewOptions(App& app) {
     SubsurfaceScatteringOptions sssOptions;
     sssOptions.enabled = app.sssEnabled;
     sssOptions.sampleCount = uint8_t(app.sssSampleCount);
-    sssOptions.scatteringDistance = app.scatteringDistance;
-    sssOptions.subsurfaceColor = app.subsurfaceColor;
+    sssOptions.scatteringDistance = 1.0f;
+    sssOptions.subsurfaceColor = float3{ 1.0f, 1.0f, 1.0f };
     sssOptions.worldUnitScale = app.worldUnitScale;
     sssOptions.ior = app.ior;
     sssOptions.debugMode = toSssDebugMode(app.debugView);
@@ -962,9 +962,9 @@ int main(int argc, char** argv) {
 
         if (ImGui::CollapsingHeader("Subsurface Scattering", ImGuiTreeNodeFlags_DefaultOpen)) {
             ImGui::SliderFloat("Thickness", &app.thickness, 0.0f, 1.0f);
-            ImGui::SliderFloat("Scattering Distance", &app.scatteringDistance, 0.0f, 1.0f,
+            ImGui::SliderFloat("Mean Free Path Distance", &app.scatteringDistance, 0.0f, 1.0f,
                     "%.4f");
-            ImGui::ColorEdit3("Subsurface Color", &app.subsurfaceColor.x);
+            ImGui::ColorEdit3("Mean Free Path Color", &app.subsurfaceColor.x);
             ImGui::SliderFloat("World Unit Scale", &app.worldUnitScale, 0.1f, 4.0f, "%.3f");
             ImGui::SliderFloat("IOR", &app.ior, 1.0f, 3.0f);
         }

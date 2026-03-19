@@ -3,8 +3,8 @@
 This report tracks the current Burley subsurface-scattering gap between Unreal's profile-driven
 pipeline and the live Filament branch in this repository. The branch has moved beyond the original
 single shared blur, but it is still materially simpler than Unreal: it carries only a small
-dedicated SSS payload, uses a single separable Burley-style blur, and applies heuristic recombine
-and transmission weighting.
+dedicated SSS payload, uses a separable Burley-style blur with albedo-aware scaling, and still
+applies heuristic recombine / transmission weighting on top of that.
 
 ## Current Filament Pipeline
 
@@ -28,9 +28,12 @@ Postprocess performs a 2-pass separable blur over the diffuse SSS buffer using:
 
 - depth rejection
 - normal rejection
-- per-pixel tint from `sssParams.rgb`
-- per-pixel scattering distance from `sssParams.a`
-- view-level `scatteringDistance`, `subsurfaceColor`, `worldUnitScale`, and `ior`
+- per-pixel mean-free-path color approximation from `sssParams.rgb`
+- per-pixel mean-free-path distance from `sssParams.a`
+- stored surface albedo from `sssAlbedo`
+- view-level `worldUnitScale` and `ior`
+- unity view-level distance/color multipliers in the sample flow, so authored material values stay
+  closer to Unreal's profile-style inputs
 
 References:
 
@@ -45,8 +48,9 @@ The recombine pass currently:
 - reconstructs a specular estimate with `centerColor - centerSetupDiffuse`
 - derives diffuse lighting by dividing setup diffuse by stored albedo
 - blurs in lighting space and reapplies albedo at the end
-- blends blurred vs unblurred lighting with a `FadedTint`-style weight derived from current
-  runtime heuristics
+- blends blurred vs unblurred lighting with a `FadedTint`-style weight
+- still derives the scalar `LerpFactor` from local runtime heuristics rather than full
+  Burley/profile terms
 - adds a separate thin-region transmission term
 - scales the blur calibration with view-level `worldUnitScale`
 - scales the transmission term using view-level `ior`
@@ -98,11 +102,26 @@ References:
     [PostProcessManager.cpp](/Users/aspirin2ds/Workspace/github/filament/filament/src/PostProcessManager.cpp#L1240)
     [sssBlur.mat](/Users/aspirin2ds/Workspace/github/filament/filament/src/materials/sss/sssBlur.mat#L199)
     [sample_sss_burley.cpp](/Users/aspirin2ds/Workspace/github/filament/samples/sample_sss_burley.cpp#L968)
+- The sample flow now treats Burley inputs more like authored profile fields.
+  - `Mean Free Path Color` and `Mean Free Path Distance` are authored on the material path.
+  - The sample no longer reuses those same values as a second set of view-level multipliers.
+  - This keeps the branch closer to Unreal's authored-profile mental model.
+- Burley scaling is now more aligned with Unreal than before.
+  - Filament stores `SurfaceAlbedo` separately and uses it during blur/recombine.
+  - The blur now derives a per-channel distance from albedo, mean-free-path color,
+    mean-free-path distance, and `worldUnitScale`.
+  - This is still an approximation of Unreal's DMFP / profile model, but it is much closer to the
+    current target than the older single-radius path.
+  - References:
+    [sssBlur.mat](/Users/aspirin2ds/Workspace/github/filament/filament/src/materials/sss/sssBlur.mat#L170)
+    [PostProcessSubsurfaceCommon.ush](/Users/aspirin2ds/Workspace/github/filament/../UnrealEngine/Engine/Shaders/Private/PostProcessSubsurfaceCommon.ush#L34)
+    [BurleyNormalizedSSSCommon.ush](/Users/aspirin2ds/Workspace/github/filament/../UnrealEngine/Engine/Shaders/Private/BurleyNormalizedSSSCommon.ush#L125)
 - The sample UI is now intentionally smaller.
   - Marble is the default preset.
-  - `Scattering Distance` defaults to `0.5`.
+  - `Mean Free Path Distance` defaults to `0.5`.
   - `IOR` defaults to `1.0` in the Marble preset and is exposed directly in the SSS panel.
   - `World Unit Scale` is exposed directly in the SSS panel.
+  - `Mean Free Path Color` is exposed directly in the SSS panel.
   - References:
     [sample_sss_burley.cpp](/Users/aspirin2ds/Workspace/github/filament/samples/sample_sss_burley.cpp#L174)
     [sample_sss_burley.cpp](/Users/aspirin2ds/Workspace/github/filament/samples/sample_sss_burley.cpp#L219)
@@ -113,9 +132,9 @@ References:
 1. No richer mean-free-path / Burley profile payload.
    - Unreal derives Burley scale from profile data including `SurfaceAlbedo`,
      `DiffuseMeanFreePath`, and `WorldUnitScale`.
-   - Current Filament now has runtime `worldUnitScale`, but it still only carries tint and
-     scattering distance in the per-pixel SSS payload.
-   - The blur radius and energy weighting are therefore still simpler and less profile-faithful.
+   - Current Filament now has runtime `worldUnitScale` plus stored albedo, but it still does not
+     carry an explicit Unreal-style Burley parameter block or decoded DMFP/profile payload.
+   - The blur radius and energy weighting are therefore closer, but still less profile-faithful.
    - References:
      [PostProcessSubsurfaceCommon.ush](/Users/aspirin2ds/Workspace/github/filament/../UnrealEngine/Engine/Shaders/Private/PostProcessSubsurfaceCommon.ush#L89)
      [sssBlur.mat](/Users/aspirin2ds/Workspace/github/filament/filament/src/materials/sss/sssBlur.mat#L170)
@@ -128,11 +147,14 @@ References:
      [SeparableSSS.ush](/Users/aspirin2ds/Workspace/github/filament/../UnrealEngine/Engine/Shaders/Private/SeparableSSS.ush#L158)
 
 3. Recombine weight is still heuristic rather than profile-driven.
-   - Current Filament now uses a more Unreal-like `FadedTint` blend shape.
+   - Current Filament now uses a more Unreal-like `FadedTint` blend shape, which is a meaningful
+     structural alignment with Unreal's `Tint * LerpFactor`.
    - However, the scalar weight still comes from `terminatorAnchor`, `shadowSupport`,
-     `backscatterSupport`, and similar local heuristics instead of full Burley/profile terms.
+     `backscatterSupport`, and similar local heuristics instead of Burley center-sample / profile
+     terms such as those used around `CalculateCenterSampleWeight`.
    - Reference:
      [sssBlur.mat](/Users/aspirin2ds/Workspace/github/filament/filament/src/materials/sss/sssBlur.mat#L264)
+     [PostProcessSubsurface.usf](/Users/aspirin2ds/Workspace/github/filament/../UnrealEngine/Engine/Shaders/Private/PostProcessSubsurface.usf#L1047)
 
 4. Transmission remains approximate.
    - `ior` now contributes, which is an improvement.
@@ -156,22 +178,28 @@ References:
      [Options.h](/Users/aspirin2ds/Workspace/github/filament/filament/include/filament/Options.h#L774)
      [sample_sss_burley.cpp](/Users/aspirin2ds/Workspace/github/filament/samples/sample_sss_burley.cpp#L247)
 
+7. Several Unreal profile UI fields are still effectively fixed white in this branch's sample flow.
+   - `Tint`, `Boundary Color Bleed`, and `Transmission Tint Color` are currently white in the
+     sample presets and are not meaningful active parity levers here.
+   - That means the practical live tuning set is closer to:
+     `Surface Albedo`, `Mean Free Path Color`, `Mean Free Path Distance`, `World Unit Scale`, and `IOR`.
+
 ## Recommended Next Step
 
 The next highest-value step to shrink the gap is:
 
-1. Add richer Burley profile-scale data to the payload.
-2. Replace the current radius and weighting heuristics with scaling closer to Unreal's Burley
-   model:
-   - separate mean-free-path / profile scaling from simple tint
-   - use `SurfaceAlbedo`-dependent Burley scaling more directly
-   - reduce reliance on local terminator/support heuristics for the scalar `LerpFactor`
+1. Tighten the scalar `LerpFactor` and center-sample behavior against Unreal's Burley path.
+2. Replace the remaining local support heuristics with logic closer to Unreal's Burley/profile
+   weighting:
+   - use the new Burley-scale inputs more directly when deriving the scalar blend weight
+   - reduce reliance on local terminator/support heuristics
+   - move closer to Unreal's center-sample / CDF-driven behavior where practical
 
 This is the best next move because it unlocks multiple parity improvements at once:
 
-- it moves the branch toward Unreal's actual recombine model
-- it reduces the current over-reliance on warm-tint heuristics
-- it creates the foundation needed for more faithful Burley scaling later
+- it builds on the new albedo-aware and world-scale-aware Burley mapping already in the branch
+- it targets the most obvious remaining single-material mismatch
+- it reduces the most prominent remaining heuristic in recombine
 - it gives a better base for judging whether profile ids or richer transmission payload are really
   needed next
 
@@ -180,15 +208,15 @@ This is the best next move because it unlocks multiple parity improvements at on
 Profile IDs are important, but they are not the first blocker on this branch.
 
 Right now, even a single-material scene still differs from Unreal because recombine is not truly
-lighting-space / albedo-aware. Adding profile identity before fixing that would increase payload
-complexity without addressing the more visible single-material mismatch.
+profile-weight-aware. Adding profile identity before tightening that would increase payload
+complexity without addressing the more visible single-material mismatch first.
 
 ## Concrete Follow-Up Order
 
-1. Add explicit Burley scale inputs such as world-unit scale to the payload.
+1. Build on the new albedo-aware and world-scale-aware Burley inputs already in the branch.
 2. Add or derive richer per-pixel Burley scale inputs beyond tint + distance.
-3. Tighten kernel scaling and recombine weighting against Unreal's Burley math.
-4. Re-evaluate whether the remaining error is mostly from profile scaling math or from mixed-profile
+3. Tighten the scalar `LerpFactor` and center-sample behavior against Unreal's Burley math.
+4. Re-evaluate whether the remaining error is mostly from profile weighting math or from mixed-profile
    separation.
 5. If mixed-profile separation is then visibly wrong, add profile identity or a profile-compatible
    mask next.
