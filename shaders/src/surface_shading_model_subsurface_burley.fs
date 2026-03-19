@@ -17,6 +17,7 @@ vec3 surfaceShading(const PixelParams pixel, const Light light, float occlusion)
 
     vec3 h = normalize(shading_view + light.l);
 
+    float rawNoL = dot(shading_normal, light.l);
     float NoL = light.NoL;
     float NoH = saturate(dot(shading_normal, h));
     float LoH = saturate(dot(light.l, h));
@@ -33,15 +34,32 @@ vec3 surfaceShading(const PixelParams pixel, const Light light, float occlusion)
     // diffuse BRDF
     vec3 Fd = pixel.diffuseColor * diffuse(pixel.roughness, shading_NoV, NoL, LoH);
 
-    // Apply NoL and occlusion to front-facing lighting
-    vec3 color = (Fd + Fr) * (NoL * occlusion);
+    // Seed the screen-space pass with a narrow, light-driven band centered slightly on the
+    // shadow side of the terminator. This keeps the effect anchored to the light / shadow
+    // boundary rather than flooding the entire lit side with blur energy.
+    float scatterStrength = saturate(pixel.scatteringDistance * 5.0);
+    float bandHalfWidth = mix(0.04, 0.12, scatterStrength);
+    float bandCenter = -bandHalfWidth * 0.35;
+    float bandShape = 1.0 - smoothstep(0.0, bandHalfWidth, abs(rawNoL - bandCenter));
+    float litShoulder = 1.0 - smoothstep(0.0, bandHalfWidth * 1.25, rawNoL);
+    float thicknessScale = mix(1.0, 0.55, pixel.thickness);
+    vec3 terminatorLift = pixel.diffuseColor * pixel.subsurfaceColor *
+            (bandShape * litShoulder * thicknessScale * 0.55);
+
+    // Apply NoL and occlusion to front-facing lighting while letting the SSS seed softly lift
+    // the shadow-side boundary.
+    vec3 color = ((Fd + Fr) * NoL + terminatorLift) * occlusion;
 
     vec3 result = (color * light.colorIntensity.rgb) * (light.colorIntensity.w * light.attenuation);
 
-    // Accumulate diffuse-only lighting for the screen-space SSS pass.
-    vec3 diffuseContrib = Fd * (NoL * occlusion);
-    diffuseContrib = (diffuseContrib * light.colorIntensity.rgb) * (light.colorIntensity.w * light.attenuation);
-    g_sssDiffuse += diffuseContrib;
+    // Keep the blur source concentrated near the terminator. A tiny lit-side shoulder helps the
+    // blur borrow energy from the lit side without turning the whole front-facing hemisphere into
+    // a scattering source.
+    vec3 edgeDiffuse = Fd * NoL * litShoulder * 0.18;
+    vec3 scatterableDiffuse = (terminatorLift + edgeDiffuse) * occlusion;
+    scatterableDiffuse = (scatterableDiffuse * light.colorIntensity.rgb) *
+            (light.colorIntensity.w * light.attenuation);
+    g_sssDiffuse += scatterableDiffuse;
 
     return result;
 }

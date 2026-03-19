@@ -1,7 +1,14 @@
 material {
     name : SubsurfaceBurley,
+    requires : [
+        uv0
+    ],
     shadingModel : subsurfaceBurley,
     parameters : [
+        {
+            type : sampler2d,
+            name : normalMap
+        },
         {
             type : float3,
             name : baseColor
@@ -41,6 +48,7 @@ material {
 fragment {
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
+        material.normal = texture(materialParams_normalMap, getUV0()).xyz * 2.0 - 1.0;
         material.baseColor.rgb = materialParams.baseColor;
         material.roughness = materialParams.roughness;
         material.metallic = materialParams.metallic;

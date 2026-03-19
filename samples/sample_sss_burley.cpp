@@ -38,8 +38,12 @@
 #include <filament/Renderer.h>
 #include <filament/RenderableManager.h>
 #include <filament/Scene.h>
+#include <filament/Texture.h>
+#include <filament/TextureSampler.h>
 #include <filament/TransformManager.h>
 #include <filament/View.h>
+
+#include <filagui/ImGuiExtensions.h>
 
 #include <math/mat3.h>
 #include <math/mat4.h>
@@ -59,6 +63,8 @@
 #include <image/ColorTransform.h>
 #include <image/LinearImage.h>
 #include <imageio/ImageEncoder.h>
+
+#include <stb_image.h>
 
 #include "generated/resources/resources.h"
 #include "generated/resources/monkey.h"
@@ -400,6 +406,7 @@ struct App {
     Entity light;
     Material* material = nullptr;
     MaterialInstance* materialInstance = nullptr;
+    Texture* normalMap = nullptr;
     MeshReader::Mesh mesh;
     mat4f transform;
     mat4f baseMeshTransform;
@@ -450,6 +457,7 @@ struct App {
     float lightIntensity = 110000.0f;
     float3 lightDirection = { 0.7f, -1.0f, -0.8f };
     float3 lightColor = { 0.98f, 0.92f, 0.89f };
+    float sunAngularRadius = 1.9f;
     float iblIntensity = 0.0f;
     Scene* scene = nullptr;
 };
@@ -510,6 +518,28 @@ std::string getGitCommit() {
     }
     pclose(pipe);
     return commit;
+}
+
+Texture* loadNormalMap(Engine* engine, const uint8_t* normals, size_t nbytes) {
+    int width, height, channels;
+    unsigned char* data = stbi_load_from_memory(normals, nbytes, &width, &height, &channels, 3);
+    if (!data) {
+        return nullptr;
+    }
+
+    Texture* normalMap = Texture::Builder()
+            .width(uint32_t(width))
+            .height(uint32_t(height))
+            .levels(0xff)
+            .format(Texture::InternalFormat::RGB8)
+            .usage(Texture::Usage::DEFAULT | Texture::Usage::GEN_MIPMAPPABLE)
+            .build(*engine);
+    Texture::PixelBufferDescriptor buffer(data, size_t(width * height * 3),
+            Texture::Format::RGB, Texture::Type::UBYTE,
+            (Texture::PixelBufferDescriptor::Callback) &stbi_image_free);
+    normalMap->setImage(*engine, 0, std::move(buffer));
+    normalMap->generateMipmaps(*engine);
+    return normalMap;
 }
 
 SubsurfaceScatteringDebugMode toSssDebugMode(DebugView view) {
@@ -730,7 +760,8 @@ void applyLighting(App& app, Engine* engine) {
     lm.setColor(li, Color::toLinear<ACCURATE>(
             sRGBColor(app.lightColor.x, app.lightColor.y, app.lightColor.z)));
     lm.setIntensity(li, app.lightIntensity);
-    lm.setDirection(li, app.lightDirection);
+    lm.setDirection(li, normalize(app.lightDirection));
+    lm.setSunAngularRadius(li, app.sunAngularRadius);
 
     auto* ibl = app.scene ? app.scene->getIndirectLight() : nullptr;
     if (ibl) {
@@ -887,6 +918,12 @@ int main(int argc, char** argv) {
             .build(*engine);
 
         auto* mi = app.materialInstance = app.material->createInstance();
+        app.normalMap = loadNormalMap(engine, MONKEY_NORMAL_DATA, MONKEY_NORMAL_SIZE);
+        if (app.normalMap) {
+            TextureSampler sampler(TextureSampler::MinFilter::LINEAR_MIPMAP_LINEAR,
+                    TextureSampler::MagFilter::LINEAR);
+            mi->setParameter("normalMap", app.normalMap, sampler);
+        }
         app.mesh = MeshReader::loadMeshFromBuffer(engine, MONKEY_SUZANNE_DATA, nullptr, nullptr, mi);
         auto ti = tcm.getInstance(app.mesh.renderable);
         app.baseMeshTransform = tcm.getWorldTransform(ti);
@@ -900,8 +937,8 @@ int main(int argc, char** argv) {
             .color(Color::toLinear<ACCURATE>(
                     sRGBColor(app.lightColor.x, app.lightColor.y, app.lightColor.z)))
             .intensity(app.lightIntensity)
-            .direction(app.lightDirection)
-            .sunAngularRadius(1.9f)
+            .direction(normalize(app.lightDirection))
+            .sunAngularRadius(app.sunAngularRadius)
             .castShadows(false)
             .build(*engine, app.light);
         scene->addEntity(app.light);
@@ -911,6 +948,7 @@ int main(int argc, char** argv) {
 
     auto cleanup = [&app](Engine* engine, View*, Scene*) {
         engine->destroy(app.light);
+        engine->destroy(app.normalMap);
         engine->destroy(app.mesh.renderable);
         engine->destroy(app.materialInstance);
         engine->destroy(app.material);
@@ -999,10 +1037,12 @@ int main(int argc, char** argv) {
         }
 
         if (ImGui::CollapsingHeader("Light")) {
-            ImGui::SliderFloat("Intensity", &app.lightIntensity, 10000.0f, 200000.0f);
-            ImGui::SliderFloat3("Direction", &app.lightDirection.x, -1.0f, 1.0f);
             ImGui::ColorEdit3("Light Color", &app.lightColor.x);
-            ImGui::SliderFloat("IBL Intensity", &app.iblIntensity, 0.0f, 100000.0f);
+            ImGui::SliderFloat("Lux", &app.lightIntensity, 0.0f, 150000.0f);
+            ImGui::SliderFloat("Sun Size", &app.sunAngularRadius, 0.1f, 10.0f);
+            ImGuiExt::DirectionWidget("Direction", app.lightDirection.v);
+            app.lightDirection = normalize(app.lightDirection);
+            ImGui::SliderFloat("IBL Intensity", &app.iblIntensity, 0.0f, 50000.0f);
         }
 
         if (ImGui::CollapsingHeader("Debug Views", ImGuiTreeNodeFlags_DefaultOpen)) {
