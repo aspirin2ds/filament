@@ -1382,6 +1382,7 @@ void FRenderer::renderJob(DriverApi& driver, RootArenaScope& rootArenaScope, FVi
     if (sssOptions.enabled) {
         input = ppm.subsurfaceScatteringBlur(
                 fg, input, colorPassOutput.sssDiffuse, colorPassOutput.sssNormal,
+                colorPassOutput.sssParams,
                 depth, cameraInfo, sssOptions);
     }
 

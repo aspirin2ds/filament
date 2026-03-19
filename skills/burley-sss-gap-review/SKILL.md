@@ -89,9 +89,10 @@ Use this exact mental model when reviewing gaps:
    - reads main color
    - reads SSS diffuse/setup buffer
    - reads stored SSS normals
+   - reads per-pixel SSS params
    - reads depth
-   - computes a scalar Burley kernel from view-global parameters
-   - recombines blurred diffuse with preserved specular
+   - computes a Burley kernel from per-pixel radius plus view-global multipliers
+   - recombines blurred diffuse with preserved specular and a thin-region transmission term
 7. `sample_sss_burley.cpp` drives comparison presets, debug views, metadata dumps, and capture reports
 
 ## Current Debug Harness
@@ -99,14 +100,13 @@ Use this exact mental model when reviewing gaps:
 The current skill should assume these debug outputs exist today:
 
 - `final`
-- `diffuse_only`
-- `specular_only`
 - `sss_influence`
 - `sss_membership`
-- `depth`
-- `normal`
 - `pre_blur_diffuse`
 - `post_blur_diffuse`
+- `terminator_window`
+- `band_mask`
+- `transmission`
 
 At the API level, `SubsurfaceScatteringDebugMode` currently includes:
 
@@ -115,9 +115,9 @@ At the API level, `SubsurfaceScatteringDebugMode` currently includes:
 - `INFLUENCE`
 - `PRE_BLUR_DIFFUSE`
 - `POST_BLUR_DIFFUSE`
-- `DEPTH`
-- `NORMAL`
+- `TERMINATOR_WINDOW`
 - `BAND_MASK`
+- `TRANSMISSION`
 
 If a bug is hard to isolate, prefer extending this debug path before changing the main shading behavior.
 
@@ -315,13 +315,13 @@ Primary bucket:
 
 - reconstruction / context
 
-### G. Transmission parity is missing
+### G. Transmission parity is approximate
 
 Current Filament state:
 
 - material thickness exists
-- Burley transmission parity does not
-- current work is focused on the lateral screen-space surface band
+- a thin-region transmission term exists in recombine
+- it is still an approximation of Unreal's fuller transmission/profile model
 
 Primary bucket:
 

@@ -779,9 +779,9 @@ enum class SubsurfaceScatteringDebugMode : uint8_t {
     INFLUENCE,
     PRE_BLUR_DIFFUSE,
     POST_BLUR_DIFFUSE,
-    DEPTH,
-    NORMAL,
-    BAND_MASK
+    TERMINATOR_WINDOW,
+    BAND_MASK,
+    TRANSMISSION
 };
 
 /**
