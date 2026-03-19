@@ -247,36 +247,42 @@ fragment {
         float tintAmount = saturate(max(centerTint.r, max(centerTint.g, centerTint.b)));
         float scatterAmount = smoothstep(0.01, 0.35, sd) * centerMask;
         float faceBoost = smoothstep(0.22, 0.88, NoV);
-        float bandStrength = scatterAmount * mix(0.70, 1.25, faceBoost);
+        float bandStrength = scatterAmount * mix(0.75, 1.10, faceBoost);
         vec3 lowFrequencyDiffuse = blurredDiffuse;
-        vec3 highFrequencyResidual = centerSetupDiffuse - blurredDiffuse;
-        vec3 warmTint = centerTint * vec3(2.8, 0.9, 0.7);
-        vec3 tintedLowFrequency = lowFrequencyDiffuse * mix(vec3(1.0), warmTint * 1.35,
-                saturate(0.75 + 0.25 * bandStrength) * tintAmount);
-        vec3 baseRecombinedDiffuse = max(highFrequencyResidual + tintedLowFrequency, vec3(0.0));
-        vec3 positiveLift = max(baseRecombinedDiffuse - centerSetupDiffuse, vec3(0.0));
-        vec3 coloredLift = positiveLift * mix(vec3(1.0), warmTint * 1.95,
-                saturate(0.88 + 0.12 * bandStrength) * tintAmount);
-        vec3 recombinedDiffuse = centerSetupDiffuse + coloredLift;
-        float liftMagnitude = luminance(positiveLift);
-        float broadScatterMask = smoothstep(0.0015, 0.02, liftMagnitude);
-        float terminatorAnchor = 1.0 - smoothstep(0.0, mix(0.28, 0.42, NoV), abs(rawNoL));
-        float shadowSupport = smoothstep(-0.42, -0.02, rawNoL);
-        float litSupport = 1.0 - smoothstep(0.02, mix(0.16, 0.28, NoV), rawNoL);
-        float litShadowBias = saturate(terminatorAnchor + 0.20 * shadowSupport + 0.12 * litSupport);
-        float silhouetteSuppression = smoothstep(0.02, 0.18, NoV);
-        float energyWindow = saturate(
-                mix(litShadowBias, broadScatterMask * litShadowBias, 0.55) *
-                mix(0.60, 1.00, edgeAttenuation) * silhouetteSuppression);
-        vec3 finalScatterDiffuse = mix(centerSetupDiffuse, recombinedDiffuse,
-                energyWindow * bandStrength);
+        vec3 highFrequencyResidual = max(centerSetupDiffuse - blurredDiffuse, vec3(0.0));
 
-        float deltaMagnitude = luminance(abs(finalScatterDiffuse - centerSetupDiffuse));
-        float influenceMask = smoothstep(0.0010, 0.02, deltaMagnitude) * centerMask;
+        // Keep the final diffuse footprint close to the post-blur result, with only a small
+        // amount of local detail preserved from the original diffuse.
+        vec3 softenedResidual = highFrequencyResidual * mix(0.05, 0.14, faceBoost);
+        vec3 baseScatterDiffuse = max(lowFrequencyDiffuse + softenedResidual, vec3(0.0));
+        vec3 baseScatterDelta = baseScatterDiffuse - centerSetupDiffuse;
+        float baseDeltaMagnitude = luminance(abs(baseScatterDelta));
+
+        float terminatorAnchor = 1.0 - smoothstep(0.0, mix(0.32, 0.50, NoV), abs(rawNoL));
+        float shadowSupport = 1.0 - smoothstep(-0.12, 0.20, rawNoL);
+        float backscatterSupport = smoothstep(0.02, 0.55, -rawNoL);
+        float litFalloff = 1.0 - smoothstep(0.04, mix(0.14, 0.24, NoV), rawNoL);
+        float silhouetteSuppression = smoothstep(0.02, 0.18, NoV);
+        float terminatorWindow = saturate(terminatorAnchor * litFalloff * silhouetteSuppression);
+        float bandPresence = saturate((0.80 * terminatorAnchor + 0.20 * shadowSupport) *
+                litFalloff * silhouetteSuppression);
+
+        float tintInfluence = saturate(
+                centerMask * tintAmount *
+                (0.75 * terminatorAnchor + 0.15 * shadowSupport + 0.10 * backscatterSupport) *
+                litFalloff * silhouetteSuppression);
+        tintInfluence *= smoothstep(0.0003, 0.008, baseDeltaMagnitude);
+        tintInfluence = max(tintInfluence, bandPresence * scatterAmount * tintAmount * 0.55);
+
+        vec3 warmTint = mix(vec3(1.0), centerTint * vec3(1.55, 0.98, 0.90), tintInfluence);
+        vec3 recombinedDiffuse = blurredDiffuse * warmTint;
+        vec3 finalScatterDiffuse = recombinedDiffuse;
+
+        float influenceMask = tintInfluence;
 
         if (materialParams.debugMode == 2) {
             vec3 debugColor = vec3(1.0, 0.35, 0.08) * influenceMask;
-            debugColor += max(finalScatterDiffuse - centerSetupDiffuse, vec3(0.0)) * 2.0;
+            debugColor += max((recombinedDiffuse - baseScatterDiffuse) * 3.0, vec3(0.0));
             postProcess.color = vec4(debugColor, 1.0);
             return;
         }
@@ -292,7 +298,7 @@ fragment {
         }
 
         if (materialParams.debugMode == 5) {
-            postProcess.color = vec4(vec3(energyWindow), 1.0);
+            postProcess.color = vec4(vec3(terminatorWindow), 1.0);
             return;
         }
 
