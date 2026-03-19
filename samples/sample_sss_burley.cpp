@@ -180,13 +180,13 @@ constexpr std::array<BurleyPreset, 4> PRESETS = {{
         0.7f,
         { 0.9f, 0.85f, 0.7f },
         0.5f,
-        0.1f,
+        1.0f,
         { 1.0f, 1.0f, 1.0f },
         { 1.0f, 1.0f, 1.0f },
         1.0f,
         0.08f,
         0.93f,
-        1.4f,
+        1.0f,
         0.75f,
         1.2f,
         0.85f,
@@ -708,6 +708,7 @@ void applyViewOptions(App& app) {
     sssOptions.sampleCount = uint8_t(app.sssSampleCount);
     sssOptions.scatteringDistance = app.scatteringDistance;
     sssOptions.subsurfaceColor = app.subsurfaceColor;
+    sssOptions.ior = app.ior;
     sssOptions.debugMode = toSssDebugMode(app.debugView);
     app.mainView->setSubsurfaceScatteringOptions(sssOptions);
 }
@@ -960,9 +961,10 @@ int main(int argc, char** argv) {
 
         if (ImGui::CollapsingHeader("Subsurface Scattering", ImGuiTreeNodeFlags_DefaultOpen)) {
             ImGui::SliderFloat("Thickness", &app.thickness, 0.0f, 1.0f);
-            ImGui::SliderFloat("Scattering Distance", &app.scatteringDistance, 0.001f, 0.5f,
+            ImGui::SliderFloat("Scattering Distance", &app.scatteringDistance, 0.0f, 1.0f,
                     "%.4f");
             ImGui::ColorEdit3("Subsurface Color", &app.subsurfaceColor.x);
+            ImGui::SliderFloat("IOR", &app.ior, 1.0f, 3.0f);
         }
 
         if (ImGui::CollapsingHeader("Emissive")) {

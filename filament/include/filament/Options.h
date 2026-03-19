@@ -817,6 +817,12 @@ struct SubsurfaceScatteringOptions {
     math::float3 subsurfaceColor = { 0.8f, 0.3f, 0.2f };
 
     /**
+     * Index of refraction used by the SSS transmission approximation.
+     * Values must be greater than or equal to 1.0.
+     */
+    float ior = 1.5f;
+
+    /**
      * Optional debug visualization for the SSS setup / blur pass.
      */
     SubsurfaceScatteringDebugMode debugMode = SubsurfaceScatteringDebugMode::NONE;

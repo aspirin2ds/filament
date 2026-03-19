@@ -53,6 +53,11 @@ material {
         },
         {
             type : float,
+            name : ior,
+            precision: high
+        },
+        {
+            type : float,
             name : cameraFar,
             precision: high
         },
@@ -316,6 +321,11 @@ fragment {
         float transmissionStrength = backlight * silhouette * thinRegion * centerMask;
         transmissionStrength *= smoothstep(0.05, 0.35, sd);
         transmissionStrength *= 0.35 + 0.65 * (1.0 - edgeAttenuation);
+        // Approximate the stronger internal bending from higher-IOR media until the
+        // transmission path carries a richer profile payload.
+        float oneOverIor = 1.0 / max(materialParams.ior, 1.0);
+        float iorInfluence = saturate((1.0 - oneOverIor) * 1.5);
+        transmissionStrength *= mix(0.35, 1.0, iorInfluence);
         vec3 transmission = centerTint * transmissionStrength * 0.45;
 
         if (materialParams.debugMode == 7) {

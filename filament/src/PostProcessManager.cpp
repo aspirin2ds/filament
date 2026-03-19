@@ -1238,6 +1238,7 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::subsurfaceScatteringBlur(Fra
     float const cameraFar = cameraInfo.zf;
     float const scatteringDistance = options.scatteringDistance;
     math::float3 const subsurfaceColor = options.subsurfaceColor;
+    float const ior = options.ior;
     int32_t const sampleCount = int32_t(options.sampleCount);
     int32_t const debugMode = int32_t(options.debugMode);
 
@@ -1330,6 +1331,7 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::subsurfaceScatteringBlur(Fra
                                     1.0f / float(outDesc.width), 1.0f / float(outDesc.height) });
                     mi->setParameter("scatteringDistance", scatteringDistance);
                     mi->setParameter("subsurfaceColor", subsurfaceColor);
+                    mi->setParameter("ior", ior);
                     mi->setParameter("sampleCount", sampleCount);
                     mi->setParameter("projectedScale", projectedScale);
                     mi->setParameter("cameraFar", cameraFar);
