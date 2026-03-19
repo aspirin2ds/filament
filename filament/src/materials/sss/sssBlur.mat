@@ -232,30 +232,12 @@ fragment {
 
         highp vec3 lightDirView = normalize(
                 (getViewFromWorldMatrix() * vec4(frameUniforms.lightDirection, 0.0)).xyz);
-        highp vec2 texel = res.zw;
-        float rawNoL = dot(centerMacroNormal, lightDirView);
-        float rawNoLX0 = dot(estimateSmoothedStoredNormal(clamp(uv - vec2(texel.x, 0.0),
-                texel * 0.5, vec2(1.0) - texel * 0.5), res), lightDirView);
-        float rawNoLX1 = dot(estimateSmoothedStoredNormal(clamp(uv + vec2(texel.x, 0.0),
-                texel * 0.5, vec2(1.0) - texel * 0.5), res), lightDirView);
-        float rawNoLY0 = dot(estimateSmoothedStoredNormal(clamp(uv - vec2(0.0, texel.y),
-                texel * 0.5, vec2(1.0) - texel * 0.5), res), lightDirView);
-        float rawNoLY1 = dot(estimateSmoothedStoredNormal(clamp(uv + vec2(0.0, texel.y),
-                texel * 0.5, vec2(1.0) - texel * 0.5), res), lightDirView);
-        rawNoL = (rawNoL * 4.0 + rawNoLX0 + rawNoLX1 + rawNoLY0 + rawNoLY1) / 8.0;
         highp vec3 centerViewPos = reconstructViewPosition(
                 uv, textureLod(materialParams_depth, uv, 0.0).r);
         highp vec3 viewDir = normalize(-centerViewPos);
         float NoV = saturate(abs(dot(centerMacroNormal, viewDir)));
-        float edgeAttenuation = smoothstep(0.08, 0.35, NoV);
-        float faceWidth = mix(0.10, 0.24, NoV);
-        float shadowWidth = mix(0.16, 0.30, NoV);
-        float litWidth = mix(0.06, 0.16, NoV);
-        float terminatorCore = 1.0 - smoothstep(0.0, faceWidth, abs(rawNoL));
-        float litSupport = 1.0 - smoothstep(0.02, litWidth, rawNoL);
-        float shadowSupport = smoothstep(-shadowWidth, -0.02, rawNoL);
-        float terminatorWindow = saturate(
-                (terminatorCore + 0.30 * litSupport + 0.18 * shadowSupport) * edgeAttenuation);
+        float rawNoL = dot(centerMacroNormal, lightDirView);
+        float edgeAttenuation = smoothstep(0.04, 0.30, NoV);
 
         if (materialParams.debugMode == 1) {
             postProcess.color = vec4(vec3(centerMask), 1.0);
@@ -265,21 +247,36 @@ fragment {
         float tintAmount = saturate(max(centerTint.r, max(centerTint.g, centerTint.b)));
         float scatterAmount = smoothstep(0.01, 0.35, sd) * centerMask;
         float faceBoost = smoothstep(0.22, 0.88, NoV);
-        float bandStrength = scatterAmount * mix(0.70, 1.35, faceBoost);
+        float bandStrength = scatterAmount * mix(0.70, 1.25, faceBoost);
         vec3 lowFrequencyDiffuse = blurredDiffuse;
         vec3 highFrequencyResidual = centerSetupDiffuse - blurredDiffuse;
-        vec3 tintedLowFrequency = lowFrequencyDiffuse * mix(vec3(1.0), centerTint * 1.25,
-                bandStrength * tintAmount);
-        vec3 recombinedDiffuse = max(highFrequencyResidual + tintedLowFrequency, vec3(0.0));
-        vec3 terminatorDiffuse = mix(centerSetupDiffuse, recombinedDiffuse,
-                terminatorWindow * bandStrength);
+        vec3 warmTint = centerTint * vec3(2.8, 0.9, 0.7);
+        vec3 tintedLowFrequency = lowFrequencyDiffuse * mix(vec3(1.0), warmTint * 1.35,
+                saturate(0.75 + 0.25 * bandStrength) * tintAmount);
+        vec3 baseRecombinedDiffuse = max(highFrequencyResidual + tintedLowFrequency, vec3(0.0));
+        vec3 positiveLift = max(baseRecombinedDiffuse - centerSetupDiffuse, vec3(0.0));
+        vec3 coloredLift = positiveLift * mix(vec3(1.0), warmTint * 1.95,
+                saturate(0.88 + 0.12 * bandStrength) * tintAmount);
+        vec3 recombinedDiffuse = centerSetupDiffuse + coloredLift;
+        float liftMagnitude = luminance(positiveLift);
+        float broadScatterMask = smoothstep(0.0015, 0.02, liftMagnitude);
+        float terminatorAnchor = 1.0 - smoothstep(0.0, mix(0.28, 0.42, NoV), abs(rawNoL));
+        float shadowSupport = smoothstep(-0.42, -0.02, rawNoL);
+        float litSupport = 1.0 - smoothstep(0.02, mix(0.16, 0.28, NoV), rawNoL);
+        float litShadowBias = saturate(terminatorAnchor + 0.20 * shadowSupport + 0.12 * litSupport);
+        float silhouetteSuppression = smoothstep(0.02, 0.18, NoV);
+        float energyWindow = saturate(
+                mix(litShadowBias, broadScatterMask * litShadowBias, 0.55) *
+                mix(0.60, 1.00, edgeAttenuation) * silhouetteSuppression);
+        vec3 finalScatterDiffuse = mix(centerSetupDiffuse, recombinedDiffuse,
+                energyWindow * bandStrength);
 
-        float deltaMagnitude = luminance(abs(terminatorDiffuse - centerSetupDiffuse));
-        float influenceMask = smoothstep(0.002, 0.03, deltaMagnitude) * centerMask;
+        float deltaMagnitude = luminance(abs(finalScatterDiffuse - centerSetupDiffuse));
+        float influenceMask = smoothstep(0.0010, 0.02, deltaMagnitude) * centerMask;
 
         if (materialParams.debugMode == 2) {
             vec3 debugColor = vec3(1.0, 0.35, 0.08) * influenceMask;
-            debugColor += max(terminatorDiffuse - centerSetupDiffuse, vec3(0.0)) * 2.0;
+            debugColor += max(finalScatterDiffuse - centerSetupDiffuse, vec3(0.0)) * 2.0;
             postProcess.color = vec4(debugColor, 1.0);
             return;
         }
@@ -295,7 +292,7 @@ fragment {
         }
 
         if (materialParams.debugMode == 5) {
-            postProcess.color = vec4(vec3(terminatorWindow), 1.0);
+            postProcess.color = vec4(vec3(energyWindow), 1.0);
             return;
         }
 
@@ -320,7 +317,7 @@ fragment {
             return;
         }
 
-        vec3 finalDiffuse = terminatorDiffuse + transmission;
+        vec3 finalDiffuse = finalScatterDiffuse + transmission;
         postProcess.color = vec4(finalDiffuse + centerSpecular, centerColor.a);
     }
 }
