@@ -2,7 +2,7 @@
 
 This capture set is the Filament side of the repeatable Unreal-vs-Filament Burley comparison workflow.
 
-- Engine commit: `084779cfb`
+- Engine commit: `1d3eed9d0`
 - Preset: `Unreal Burley Reference`
 - Metadata: [`metadata.json`](./metadata.json)
 - Baseline render settings: direct light only, fixed viewpoints, TAA disabled, bloom disabled, DOF disabled, SSR disabled
