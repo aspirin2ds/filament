@@ -99,7 +99,7 @@ constexpr std::array<const char*, size_t(DebugView::COUNT)> DEBUG_VIEW_NAMES = {
     "Post-Blur Diffuse",
     "Terminator Window",
     "Band Mask",
-    "Transmission"
+    "Transmission View"
 }};
 
 struct BurleyPreset {
@@ -246,7 +246,7 @@ constexpr std::array<ComparisonArtifact, 8> COMPARISON_ARTIFACTS = {{
     { DebugView::POST_BLUR_DIFFUSE, "Post-Blur Diffuse", "post_blur_diffuse" },
     { DebugView::TERMINATOR_WINDOW, "Terminator Window", "terminator_window" },
     { DebugView::BAND_MASK, "Band Mask", "band_mask" },
-    { DebugView::TRANSMISSION, "Transmission", "transmission" }
+    { DebugView::TRANSMISSION, "Transmission View", "transmission" }
 }};
 
 struct GapRow {
@@ -269,27 +269,27 @@ constexpr std::array<GapRow, 16> GAP_ROWS = {{
     },
     {
         "pre-blur setup buffer contents",
-        "Setup stores Burley-ready diffuse plus profile metadata.",
+        "Setup stores Burley-ready diffuse plus per-pixel material metadata.",
         "Diffuse.rgb plus membership alpha is stored alongside per-pixel Burley tint/radius and thickness context.",
-        "Blur now reads real per-pixel Burley params instead of one shared view-global profile.",
-        "Broad interior scatter can be driven from material data rather than a contour seed alone; profile ids and boundary bleed are still not part of the payload.",
-        "Only add profile id / bleed if mixed-profile scenes actually require it."
+        "Blur now reads real per-pixel Burley params instead of one shared view-global preset.",
+        "Broad interior scatter can be driven from material data rather than a contour seed alone; boundary bleed is still not part of the payload.",
+        "Keep improving direct-authored Burley fidelity before adding more payload complexity."
     },
     {
         "per-pixel SSS membership",
-        "Per-pixel profile membership is carried through the setup pass.",
+        "Per-pixel SSS membership is carried through the setup pass.",
         "Implemented as per-pixel membership alpha in the SSS diffuse buffer.",
         "Membership debug view matches eligible SSS pixels.",
-        "Single scalar membership bit is available, but no profile differentiation yet.",
-        "Promote membership to profile-aware ids for multi-material scenes."
+        "Single scalar membership bit is available for the Burley path.",
+        "Keep the membership mask simple unless captures show a real need for more separation."
     },
     {
         "per-pixel scattering parameters",
-        "Mean free path and tint are resolved per pixel via the subsurface profile system.",
+        "Mean free path and tint are resolved per pixel through the material path.",
         "Implemented via per-pixel auxiliary Burley params, with View::SubsurfaceScatteringOptions acting as a multiplier/default.",
-        "Different Burley materials can now carry different radius and tint values through the same blur pass, though profile ids are still absent if they overlap in screen space.",
-        "Current scope targets Filament-first material parity rather than full Unreal profile assets.",
-        "Validate mixed-material scenes before adding profile-id rejection."
+        "Different Burley materials can now carry different radius and tint values through the same blur pass.",
+        "Current scope targets Filament-first material parity rather than Unreal asset parity.",
+        "Validate mixed-material scenes before adding more rejection complexity."
     },
     {
         "world-unit kernel scaling",
@@ -301,11 +301,11 @@ constexpr std::array<GapRow, 16> GAP_ROWS = {{
     },
     {
         "Burley kernel shape",
-        "Burley uses normalized diffusion with profile-driven adaptive sampling.",
+        "Burley uses normalized diffusion with adaptive sampling.",
         "A single-radius separable Burley kernel is used.",
-        "Band shape is plausible but not yet profile-accurate under all presets.",
-        "Current kernel is scalar and global rather than profile-driven.",
-        "Match Unreal's per-profile scaling before tuning sample count or weights."
+        "Band shape is plausible but not yet fully accurate under all presets.",
+        "Current kernel still uses approximations rather than the full Unreal Burley scaling path.",
+        "Match Unreal's Burley scaling before tuning sample count or weights."
     },
     {
         "bilateral depth rejection",
@@ -313,7 +313,7 @@ constexpr std::array<GapRow, 16> GAP_ROWS = {{
         "Implemented in the blur pass.",
         "Geometric borders stay sharper than the first prototype.",
         "Depth threshold is still tied to the global scattering distance.",
-        "Parameterize the rejection threshold per pixel once profile radii are stored."
+        "Parameterize the rejection threshold per pixel once Burley radii are stored more faithfully."
     },
     {
         "bilateral normal rejection",
@@ -328,48 +328,48 @@ constexpr std::array<GapRow, 16> GAP_ROWS = {{
         "Burley adds scattered diffuse back to untouched non-SSS lighting.",
         "Implemented as original diffuse plus positive scattering delta tinted by the per-pixel Burley params, with a separate thin-region transmission lift.",
         "Final shading reads less like a rim blur and more like broad interior diffusion plus backlit translucency, fixing the earlier contour-specific gating problem.",
-        "Transmission is still approximated from thickness and geometry rather than a full profile model.",
-        "Tune transmission strength and mixed-material behavior against captures before adding more profile complexity."
+        "Transmission is still approximated from thickness and geometry rather than a full data model.",
+        "Tune transmission strength and behavior against captures before adding more complexity."
     },
     {
         "base color application point",
-        "Surface albedo participates at setup/recombine according to the profile.",
-        "Base color currently still follows Filament's material path rather than an Unreal-equivalent profile block.",
-        "Reference albedo is close, but profile coupling is incomplete.",
+        "Surface albedo participates at setup/recombine according to the Burley path.",
+        "Base color currently still follows Filament's material path rather than an Unreal-equivalent parameter block.",
+        "Reference albedo is close, but Burley coupling is incomplete.",
         "Surface albedo is not stored separately in the SSS setup data.",
-        "Add explicit Burley profile mapping for surface albedo versus tint."
+        "Add more explicit Burley mapping for surface albedo versus tint."
     },
     {
         "boundary color bleed",
-        "Boundary bleed is profile-aware and configurable.",
+        "Boundary bleed is configurable.",
         "Not implemented.",
         "Different SSS materials would hard-stop or incorrectly mix.",
-        "No profile id or boundary tuning reaches the blur pass today.",
-        "Add profile-aware bleed weighting once profile ids exist."
+        "No boundary tuning reaches the blur pass today.",
+        "Add boundary-aware bleed weighting only if captures justify it."
     },
     {
         "transmission / thickness lighting",
         "Transmission is handled separately from lateral surface blur.",
         "Implemented as a distinct recombine-stage backlight / silhouette lift driven by thickness, geometry, and Burley tint.",
         "Ears and other thin regions can now pick up a separate translucent glow from the main blur lobe, though it is still an approximation rather than full Unreal transmission parity.",
-        "No dedicated thickness texture or full profile transmission block exists yet.",
+        "No dedicated thickness texture or full transmission block exists yet.",
         "Tune against thin-region captures before deciding whether a richer transmission payload is necessary."
     },
     {
-        "multi-material profile handling",
-        "Multiple subsurface profiles can coexist in one scene.",
+        "multi-material Burley handling",
+        "Multiple subsurface materials can coexist in one scene.",
         "Not implemented.",
-        "Different materials would share one global blur profile.",
-        "No profile id cache or per-pixel profile selection exists.",
-        "Store profile ids and reject or bleed taps based on profile compatibility."
+        "Different materials still share the same postprocess structure.",
+        "No extra material-compatibility rejection exists today.",
+        "Only add more separation logic if captures show a real problem."
     },
     {
         "dual-spec preservation",
-        "Dual specular is a separate profile feature layered after SSS.",
-        "Not implemented.",
-        "Skin-like glints will still differ from Unreal even when the band matches.",
-        "Current work isolates diffuse scattering from the specular path only.",
-        "Keep it isolated until diffuse Burley parity is acceptable."
+        "Dual specular is a separate Burley feature layered after SSS.",
+        "Implemented in the material and lighting path.",
+        "Specular highlight shape can now diverge from the single-lobe path.",
+        "The branch now uses direct-authored dual-lobe parameters instead of a larger Unreal-style data package.",
+        "Validate highlight response against captures and tune the lobe model."
     },
     {
         "half-res / full-res behavior",
@@ -412,7 +412,6 @@ struct App {
     float thickness = 0.5f;
     float scatteringDistance = 0.15f;
     float3 subsurfaceColor = { 0.8f, 0.2f, 0.1f };
-    float4 emissive = { 0.0f, 0.0f, 0.0f, 0.0f };
 
     float3 meanFreePathColor = { 1.0f, 0.530583f, 0.526042f };
     float meanFreePathDistance = 0.15f;
@@ -650,7 +649,8 @@ void writeComparisonReport(App const& app) {
     out << "| Boundary Color Bleed | fixed white in current sample flow; not consumed by engine | Missing in engine |\n";
     out << "| Transmission Tint Color | fixed white in current sample flow | Not an active parity lever |\n";
     out << "| Transmission block | separate thin-region transmission lift driven by thickness, IOR, and current Burley scale | Approximate |\n";
-    out << "| Dual Specular | untouched default lit specular path | Missing |\n\n";
+    out << "| Dual Specular | material/light-path dual-lobe specular for Burley shading |\n"
+           "      | Implemented |\n\n";
 
     out << "## Artifact Grid\n\n";
     out << "Capture filenames are deterministic and overwrite previous runs for the same preset.\n\n";
@@ -670,8 +670,8 @@ void writeComparisonReport(App const& app) {
             << row.rootCause << " | " << row.fixPlan << " |\n";
     }
     out << "\n## Next Action\n\n";
-    out << "Tighten the Burley scale and `LerpFactor` calibration against the Unreal Burley "
-           "profile screenshot before adding profile ids or dual-spec complexity.\n";
+    out << "Tighten the Burley scale, `LerpFactor`, and transmission calibration against the "
+           "Unreal Burley reference captures before adding more payload complexity.\n";
 }
 
 void applyViewpoint(App& app) {
@@ -695,7 +695,9 @@ void applyMaterialDebugView(App& app) {
     mi->setParameter("thickness", app.thickness);
     mi->setParameter("scatteringDistance", app.scatteringDistance);
     mi->setParameter("subsurfaceColor", app.subsurfaceColor);
-    mi->setParameter("emissive", app.emissive);
+    mi->setParameter("roughness0", app.roughness0);
+    mi->setParameter("roughness1", app.roughness1);
+    mi->setParameter("lobeMix", app.lobeMix);
 }
 
 void applyViewOptions(App& app) {
@@ -710,6 +712,10 @@ void applyViewOptions(App& app) {
     sssOptions.subsurfaceColor = float3{ 1.0f, 1.0f, 1.0f };
     sssOptions.worldUnitScale = app.worldUnitScale;
     sssOptions.ior = app.ior;
+    sssOptions.extinctionScale = app.extinctionScale;
+    sssOptions.normalScale = app.normalScale;
+    sssOptions.scatteringDistribution = app.scatteringDistribution;
+    sssOptions.transmissionTintColor = app.transmissionTintColor;
     sssOptions.debugMode = toSssDebugMode(app.debugView);
     app.mainView->setSubsurfaceScatteringOptions(sssOptions);
 }
@@ -969,14 +975,20 @@ int main(int argc, char** argv) {
             ImGui::SliderFloat("IOR", &app.ior, 1.0f, 3.0f);
         }
 
-        if (ImGui::CollapsingHeader("Emissive")) {
-            float3 emissiveColor = { app.emissive.x, app.emissive.y, app.emissive.z };
-            float emissiveStrength = app.emissive.w;
-            ImGui::ColorEdit3("Emissive Color", &emissiveColor.x);
-            ImGui::SliderFloat("Emissive Strength", &emissiveStrength, 0.0f, 10.0f);
-            app.emissive = {
-                emissiveColor.x, emissiveColor.y, emissiveColor.z, emissiveStrength
-            };
+        if (ImGui::CollapsingHeader("Transmission")) {
+            ImGui::SliderFloat("Transmission Extinction Scale##Transmission",
+                    &app.extinctionScale, 0.01f, 5.0f);
+            ImGui::SliderFloat("Transmission Normal Scale##Transmission",
+                    &app.normalScale, 0.0f, 1.0f);
+            ImGui::SliderFloat("Transmission Scattering Distribution##Transmission",
+                    &app.scatteringDistribution, 0.0f, 1.0f);
+            ImGui::ColorEdit3("Transmission Tint##Transmission", &app.transmissionTintColor.x);
+        }
+
+        if (ImGui::CollapsingHeader("Dual Specular")) {
+            ImGui::SliderFloat("Dual Spec Roughness 0##DualSpec", &app.roughness0, 0.05f, 1.5f);
+            ImGui::SliderFloat("Dual Spec Roughness 1##DualSpec", &app.roughness1, 0.05f, 2.0f);
+            ImGui::SliderFloat("Dual Spec Lobe Mix##DualSpec", &app.lobeMix, 0.0f, 1.0f);
         }
 
         if (ImGui::CollapsingHeader("SSS Blur Pass", ImGuiTreeNodeFlags_DefaultOpen)) {

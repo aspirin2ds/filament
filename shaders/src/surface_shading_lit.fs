@@ -228,6 +228,9 @@ void getSubsurfacePixelParams(const MaterialInputs material, inout PixelParams p
 #if defined(SHADING_MODEL_SUBSURFACE_BURLEY)
     pixel.subsurfaceColor = material.subsurfaceColor;
     pixel.scatteringDistance = max(material.scatteringDistance, 0.001);
+    pixel.roughness0 = max(material.roughness0, 0.001);
+    pixel.roughness1 = max(material.roughness1, 0.001);
+    pixel.lobeMix = saturate(material.lobeMix);
     pixel.thickness = saturate(material.thickness);
 #endif
 }

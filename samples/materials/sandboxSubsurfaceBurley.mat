@@ -38,8 +38,16 @@ material {
             name : subsurfaceColor
         },
         {
-            type : float4,
-            name : emissive
+            type : float,
+            name : roughness0
+        },
+        {
+            type : float,
+            name : roughness1
+        },
+        {
+            type : float,
+            name : lobeMix
         }
     ],
     specularAntiAliasing : true
@@ -56,6 +64,8 @@ fragment {
         material.thickness = materialParams.thickness;
         material.scatteringDistance = materialParams.scatteringDistance;
         material.subsurfaceColor = materialParams.subsurfaceColor;
-        material.emissive = materialParams.emissive;
+        material.roughness0 = materialParams.roughness0;
+        material.roughness1 = materialParams.roughness1;
+        material.lobeMix = materialParams.lobeMix;
     }
 }

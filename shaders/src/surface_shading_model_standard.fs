@@ -73,6 +73,9 @@ vec3 isotropicLobe(const PixelParams pixel, const Light light, const vec3 h,
 
 vec3 specularLobe(const PixelParams pixel, const Light light, const vec3 h,
         float NoV, float NoL, float NoH, float LoH) {
+#if defined(SHADING_MODEL_SUBSURFACE_BURLEY)
+    return burleyDualSpecularLobe(pixel, h, NoV, NoL, NoH, LoH);
+#endif
 #if defined(MATERIAL_HAS_ANISOTROPY)
     return anisotropicLobe(pixel, light, h, NoV, NoL, NoH, LoH);
 #else

@@ -1460,6 +1460,9 @@ void FView::setSubsurfaceScatteringOptions(SubsurfaceScatteringOptions options) 
     options.sampleCount = std::max(uint8_t(3), std::min(uint8_t(25), options.sampleCount));
     options.worldUnitScale = std::max(0.001f, options.worldUnitScale);
     options.ior = std::max(1.0f, options.ior);
+    options.extinctionScale = std::max(0.001f, options.extinctionScale);
+    options.normalScale = clamp(options.normalScale, 0.0f, 1.0f);
+    options.scatteringDistribution = clamp(options.scatteringDistribution, 0.0f, 1.0f);
     mSubsurfaceScatteringOptions = options;
 }
 

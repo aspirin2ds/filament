@@ -1241,6 +1241,10 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::subsurfaceScatteringBlur(Fra
     math::float3 const subsurfaceColor = options.subsurfaceColor;
     float const worldUnitScale = options.worldUnitScale;
     float const ior = options.ior;
+    float const extinctionScale = options.extinctionScale;
+    float const normalScale = options.normalScale;
+    float const scatteringDistribution = options.scatteringDistribution;
+    math::float3 const transmissionTintColor = options.transmissionTintColor;
     int32_t const sampleCount = int32_t(options.sampleCount);
     int32_t const debugMode = int32_t(options.debugMode);
 
@@ -1343,6 +1347,10 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::subsurfaceScatteringBlur(Fra
                     mi->setParameter("subsurfaceColor", subsurfaceColor);
                     mi->setParameter("worldUnitScale", worldUnitScale);
                     mi->setParameter("ior", ior);
+                    mi->setParameter("extinctionScale", extinctionScale);
+                    mi->setParameter("normalScale", normalScale);
+                    mi->setParameter("scatteringDistribution", scatteringDistribution);
+                    mi->setParameter("transmissionTintColor", transmissionTintColor);
                     mi->setParameter("sampleCount", sampleCount);
                     mi->setParameter("projectedScale", projectedScale);
                     mi->setParameter("cameraFar", cameraFar);

@@ -68,6 +68,26 @@ material {
         },
         {
             type : float,
+            name : extinctionScale,
+            precision: high
+        },
+        {
+            type : float,
+            name : normalScale,
+            precision: high
+        },
+        {
+            type : float,
+            name : scatteringDistribution,
+            precision: high
+        },
+        {
+            type : float3,
+            name : transmissionTintColor,
+            precision: medium
+        },
+        {
+            type : float,
             name : cameraFar,
             precision: high
         },
@@ -119,6 +139,11 @@ fragment {
         return (s / (8.0 * PI)) * (exp(-s * r) + exp(-s * r / 3.0)) / max(r, 0.0001);
     }
 
+    vec3 getCDF3D(vec3 d, float x) {
+        vec3 safeD = max(d, vec3(0.0001));
+        return vec3(1.0) - 0.25 * exp(-x / safeD) - 0.75 * exp(-x / (3.0 * safeD));
+    }
+
     vec3 getSearchLightDiffuseScalingFactor3D(vec3 surfaceAlbedo) {
         vec3 value = surfaceAlbedo - vec3(0.33);
         return vec3(3.5) + 100.0 * value * value * value * value;
@@ -148,6 +173,24 @@ fragment {
         return view.xyz / max(view.w, 1e-6);
     }
 
+    highp vec3 estimateGeometricNormalFromDepth(highp vec2 uv, highp vec4 res) {
+        highp vec2 texel = res.zw;
+        highp vec2 uvX = clamp(uv + vec2(texel.x, 0.0), texel * 0.5, vec2(1.0) - texel * 0.5);
+        highp vec2 uvY = clamp(uv + vec2(0.0, texel.y), texel * 0.5, vec2(1.0) - texel * 0.5);
+
+        highp float depthC = textureLod(materialParams_depth, uv, 0.0).r;
+        highp float depthX = textureLod(materialParams_depth, uvX, 0.0).r;
+        highp float depthY = textureLod(materialParams_depth, uvY, 0.0).r;
+
+        highp vec3 pC = reconstructViewPosition(uv, depthC);
+        highp vec3 pX = reconstructViewPosition(uvX, depthX);
+        highp vec3 pY = reconstructViewPosition(uvY, depthY);
+
+        highp vec3 dx = pX - pC;
+        highp vec3 dy = pY - pC;
+        return normalize(cross(dx, dy));
+    }
+
     highp vec4 sampleStoredNormalData(highp vec2 uv) {
         return textureLod(materialParams_normal, uv, 0.0);
     }
@@ -156,8 +199,8 @@ fragment {
         return max(textureLod(materialParams_albedo, uv, 0.0).rgb, vec3(1e-3));
     }
 
-    highp vec3 estimateSmoothedStoredNormal(highp vec2 uv, highp vec4 res) {
-        highp vec2 texel = res.zw;
+    highp vec3 estimateSmoothedStoredNormal(highp vec2 uv, highp vec4 res, float radiusScale) {
+        highp vec2 texel = res.zw * radiusScale;
         highp vec3 center = normalize(sampleStoredNormalData(uv).xyz) * 4.0;
         highp vec3 x0 = normalize(sampleStoredNormalData(clamp(uv - vec2(texel.x, 0.0),
                 texel * 0.5, vec2(1.0) - texel * 0.5)).xyz);
@@ -203,7 +246,8 @@ fragment {
         vec3 centerSpecular = max(centerColor.rgb - centerSetupDiffuse, vec3(0.0));
         highp vec4 centerNormalData = sampleStoredNormalData(uv);
         highp vec3 centerNormal = normalize(centerNormalData.xyz);
-        highp vec3 centerMacroNormal = estimateSmoothedStoredNormal(uv, res);
+        highp vec3 centerMacroNormal = estimateSmoothedStoredNormal(uv, res, 1.0);
+        highp vec3 centerGeometricNormal = estimateGeometricNormalFromDepth(uv, res);
         float centerThickness = saturate(centerNormalData.a);
         vec3 centerTint = saturate(centerParamsData.rgb * materialParams.subsurfaceColor);
         float sd = max(centerParamsData.a * materialParams.scatteringDistance, 0.001);
@@ -215,6 +259,8 @@ fragment {
         // Use the per-pixel scattering radius and keep view options as a global multiplier.
         float pixelScale = materialParams.projectedScale / centerDepth;
         float effectiveRadiusPixels = max(supportRadius * pixelScale * 0.5, 1.0);
+        float centerSampleRadius = 1.0 / max(pixelScale, 1e-4);
+        vec3 centerSampleCdf = saturate(getCDF3D(centerD, centerSampleRadius));
 
         float depthThreshold = supportRadius * 2.0;
 
@@ -239,7 +285,7 @@ fragment {
             highp float depthP = -linearizeDepth(textureLod(materialParams_depth, uvP, 0.0).r);
             float bilateralP = depthWeight(centerDepth, depthP, depthThreshold);
             float maskP = diffuseDataP.a;
-            highp vec3 normalP = estimateSmoothedStoredNormal(uvP, res);
+            highp vec3 normalP = estimateSmoothedStoredNormal(uvP, res, 1.0);
             float filterP = bilateralP * normalWeight(centerMacroNormal, normalP) * maskP;
             vec3 wP = kernelWeight * filterP;
             vec3 diffuseP = diffuseDataP.rgb;
@@ -255,7 +301,7 @@ fragment {
             highp float depthN = -linearizeDepth(textureLod(materialParams_depth, uvN, 0.0).r);
             float bilateralN = depthWeight(centerDepth, depthN, depthThreshold);
             float maskN = diffuseDataN.a;
-            highp vec3 normalN = estimateSmoothedStoredNormal(uvN, res);
+            highp vec3 normalN = estimateSmoothedStoredNormal(uvN, res, 1.0);
             float filterN = bilateralN * normalWeight(centerMacroNormal, normalN) * maskN;
             vec3 wN = kernelWeight * filterN;
             vec3 diffuseN = diffuseDataN.rgb;
@@ -309,14 +355,13 @@ fragment {
         float bandPresence = saturate((0.80 * terminatorAnchor + 0.20 * shadowSupport) *
                 litFalloff * silhouetteSuppression);
 
-        float lerpFactor = saturate(
-                scatterAmount *
+        float supportLerp = saturate(
                 (0.75 * terminatorAnchor + 0.15 * shadowSupport + 0.10 * backscatterSupport) *
                 litFalloff * silhouetteSuppression);
-        lerpFactor *= smoothstep(0.0003, 0.008, baseDeltaMagnitude);
-        lerpFactor = max(lerpFactor, bandPresence * scatterAmount * 0.55);
-
-        vec3 fadedTint = saturate(centerTint * lerpFactor);
+        float detailGate = smoothstep(0.0003, 0.008, baseDeltaMagnitude);
+        vec3 profileLerp = scatterAmount * (vec3(1.0) - centerSampleCdf) * detailGate;
+        vec3 heuristicFloor = vec3(bandPresence * scatterAmount * 0.55 * supportLerp);
+        vec3 fadedTint = saturate(centerTint * max(profileLerp, heuristicFloor));
         vec3 finalScatterLighting = mix(centerSetupLighting, blurredDiffuse, fadedTint);
 
         float influenceMask = max3(fadedTint);
@@ -352,7 +397,15 @@ fragment {
         // laterally scattered diffuse. The lack of a thickness texture means we approximate it
         // from the material thickness plus geometric silhouette and backlighting.
         float silhouette = pow(1.0 - NoV, 3.5);
-        float backlight = smoothstep(0.08, 0.7, -rawNoL);
+        // Blend between a depth-derived geometric normal and the full stored shading normal so
+        // the control has a meaningful range even when the material normal detail is subtle.
+        float transmissionBlend = sqrt(materialParams.normalScale);
+        highp vec3 transmissionNormal = normalize(mix(centerGeometricNormal, centerNormal,
+                transmissionBlend));
+        float transmissionNoL = dot(transmissionNormal, lightDirView);
+        float distributionBias = mix(0.02, 0.20, materialParams.scatteringDistribution);
+        float distributionRange = mix(0.45, 0.90, materialParams.scatteringDistribution);
+        float backlight = smoothstep(distributionBias, distributionRange, -transmissionNoL);
         float thinRegion = 1.0 - centerThickness;
         float transmissionStrength = backlight * silhouette * thinRegion * centerMask;
         transmissionStrength *= smoothstep(0.05, 0.35, supportRadius);
@@ -362,10 +415,20 @@ fragment {
         float oneOverIor = 1.0 / max(materialParams.ior, 1.0);
         float iorInfluence = saturate((1.0 - oneOverIor) * 1.5);
         transmissionStrength *= mix(0.35, 1.0, iorInfluence);
-        vec3 transmission = centerTint * transmissionStrength * 0.45;
+        // Keep extinction responsive even in the thin regions where transmission is most visible
+        // by using a minimum optical path length instead of letting the attenuation collapse to 1.
+        float opticalPath = mix(0.15, 1.0, centerThickness) * max(supportRadius, 0.001);
+        float transmissionAttenuation = exp(-materialParams.extinctionScale * opticalPath);
+        transmissionStrength *= transmissionAttenuation;
+        vec3 transmissionTint = centerTint * materialParams.transmissionTintColor;
+        vec3 transmission = transmissionTint * transmissionStrength * 0.45;
 
         if (materialParams.debugMode == 7) {
-            postProcess.color = vec4(transmission, 1.0);
+            // Use a debug-only exposure/tonemap so the isolated transmission term remains readable
+            // even when the physically plausible contribution is very small.
+            vec3 transmissionDebug = transmission * 8.0;
+            transmissionDebug = transmissionDebug / (vec3(1.0) + transmissionDebug);
+            postProcess.color = vec4(transmissionDebug, 1.0);
             return;
         }
 

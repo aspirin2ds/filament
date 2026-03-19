@@ -144,13 +144,39 @@ vec3 specularDFG(const PixelParams pixel) {
 #endif
 }
 
+#if defined(SHADING_MODEL_SUBSURFACE_BURLEY)
+vec3 specularDFG(const PixelParams pixel, float perceptualRoughness) {
+    vec3 dfg = prefilteredDFG(perceptualRoughness, shading_NoV);
+#if defined(MATERIAL_HAS_SPECULAR_COLOR_FACTOR) || defined(MATERIAL_HAS_SPECULAR_FACTOR)
+    return mix(dfg.xxx, dfg.yyy, pixel.f0) * pixel.specular;
+#else
+    return mix(dfg.xxx, dfg.yyy, pixel.f0);
+#endif
+}
+#endif
+
+#if defined(SHADING_MODEL_SUBSURFACE_BURLEY)
+vec3 getReflectedVector(const PixelParams pixel, const vec3 n, float roughness) {
+#if defined(MATERIAL_HAS_ANISOTROPY)
+    vec3 r = getReflectedVector(pixel, shading_view, n);
+#else
+    vec3 r = shading_reflected;
+#endif
+    return getSpecularDominantDirection(n, r, roughness);
+}
+#endif
+
 vec3 getReflectedVector(const PixelParams pixel, const vec3 n) {
+#if defined(SHADING_MODEL_SUBSURFACE_BURLEY)
+    return getReflectedVector(pixel, n, pixel.roughness);
+#else
 #if defined(MATERIAL_HAS_ANISOTROPY)
     vec3 r = getReflectedVector(pixel, shading_view, n);
 #else
     vec3 r = shading_reflected;
 #endif
     return getSpecularDominantDirection(n, r, pixel.roughness);
+#endif
 }
 
 //------------------------------------------------------------------------------
@@ -757,7 +783,21 @@ void evaluateIBL(const MaterialInputs material, const PixelParams pixel, inout v
     vec3 E = specularDFG(pixel);
     if (ssrFr.a < 1.0) { // prevent reading the IBL if possible
         vec3 r = getReflectedVector(pixel, shading_normal);
+#if defined(SHADING_MODEL_SUBSURFACE_BURLEY)
+        float pr0 = burleyDualSpecularPerceptualRoughness(pixel, pixel.roughness0);
+        float pr1 = burleyDualSpecularPerceptualRoughness(pixel, pixel.roughness1);
+        float r0 = perceptualRoughnessToRoughness(pr0);
+        float r1 = perceptualRoughnessToRoughness(pr1);
+        vec3 E0 = specularDFG(pixel, pr0);
+        vec3 E1 = specularDFG(pixel, pr1);
+        vec3 R0 = getReflectedVector(pixel, shading_normal, r0);
+        vec3 R1 = getReflectedVector(pixel, shading_normal, r1);
+        vec3 Fr0 = E0 * prefilteredRadiance(R0, perceptualRoughnessToLod(pr0));
+        vec3 Fr1 = E1 * prefilteredRadiance(R1, perceptualRoughnessToLod(pr1));
+        Fr = mix(Fr0, Fr1, pixel.lobeMix);
+#else
         Fr = E * prefilteredRadiance(r, perceptualRoughnessToLod(pixel.perceptualRoughness));
+#endif
     }
 #elif IBL_INTEGRATION == IBL_INTEGRATION_IMPORTANCE_SAMPLING
     vec3 E = vec3(0.0); // TODO: fix for importance sampling

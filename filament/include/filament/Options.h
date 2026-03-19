@@ -829,6 +829,29 @@ struct SubsurfaceScatteringOptions {
     float ior = 1.5f;
 
     /**
+     * Scales how quickly the transmission contribution is attenuated by thickness.
+     * Values must be greater than 0.
+     */
+    float extinctionScale = 1.0f;
+
+    /**
+     * Controls how strongly the shading normal affects the transmission response.
+     * Values must be between 0 and 1.
+     */
+    float normalScale = 0.08f;
+
+    /**
+     * Controls the forward-scattering emphasis of the transmission approximation.
+     * Values must be between 0 and 1.
+     */
+    float scatteringDistribution = 0.93f;
+
+    /**
+     * Per-channel tint applied to the transmission contribution.
+     */
+    math::float3 transmissionTintColor = { 1.0f, 1.0f, 1.0f };
+
+    /**
      * Optional debug visualization for the SSS setup / blur pass.
      */
     SubsurfaceScatteringDebugMode debugMode = SubsurfaceScatteringDebugMode::NONE;

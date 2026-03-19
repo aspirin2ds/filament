@@ -59,6 +59,9 @@ struct PixelParams {
 #if defined(SHADING_MODEL_SUBSURFACE_BURLEY)
     vec3  subsurfaceColor;
     float scatteringDistance;
+    float roughness0;
+    float roughness1;
+    float lobeMix;
 #endif
 
 #if defined(SHADING_MODEL_CLOTH) && defined(MATERIAL_HAS_SUBSURFACE_COLOR)

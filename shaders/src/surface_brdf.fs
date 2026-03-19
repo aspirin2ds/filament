@@ -262,3 +262,32 @@ float diffuse(float roughness, float NoV, float NoL, float LoH) {
     return Fd_Burley(roughness, NoV, NoL, LoH);
 #endif
 }
+
+#if defined(SHADING_MODEL_SUBSURFACE_BURLEY)
+float burleyDualSpecularPerceptualRoughness(const PixelParams pixel, float scale) {
+    return clamp(pixel.perceptualRoughness * scale, MIN_PERCEPTUAL_ROUGHNESS, 1.0);
+}
+
+float burleyDualSpecularRoughness(const PixelParams pixel, float scale) {
+    return perceptualRoughnessToRoughness(burleyDualSpecularPerceptualRoughness(pixel, scale));
+}
+
+vec3 burleyDualSpecularLobe(const PixelParams pixel, const vec3 h,
+        float NoV, float NoL, float NoH, float LoH) {
+    float roughness0 = burleyDualSpecularRoughness(pixel, pixel.roughness0);
+    float roughness1 = burleyDualSpecularRoughness(pixel, pixel.roughness1);
+
+    float D0 = distribution(roughness0, NoH, h);
+    float V0 = visibility(roughness0, NoV, NoL);
+    float D1 = distribution(roughness1, NoH, h);
+    float V1 = visibility(roughness1, NoV, NoL);
+#if defined(MATERIAL_HAS_SPECULAR_COLOR_FACTOR) || defined(MATERIAL_HAS_SPECULAR_FACTOR)
+    vec3 F = fresnel(pixel.f0, pixel.f90, LoH);
+#else
+    vec3 F = fresnel(pixel.f0, LoH);
+#endif
+    vec3 Fr0 = (D0 * V0) * F;
+    vec3 Fr1 = (D1 * V1) * F;
+    return mix(Fr0, Fr1, pixel.lobeMix);
+}
+#endif

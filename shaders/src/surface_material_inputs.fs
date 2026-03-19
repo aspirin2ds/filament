@@ -44,6 +44,9 @@ struct MaterialInputs {
 #if defined(SHADING_MODEL_SUBSURFACE_BURLEY)
     vec3  subsurfaceColor;
     float scatteringDistance;
+    float roughness0;
+    float roughness1;
+    float lobeMix;
 #endif
 
 #if defined(SHADING_MODEL_CLOTH)
@@ -152,6 +155,9 @@ void initMaterial(out MaterialInputs material) {
 #if defined(SHADING_MODEL_SUBSURFACE_BURLEY)
     material.subsurfaceColor = vec3(1.0);
     material.scatteringDistance = 1.0;
+    material.roughness0 = 0.75;
+    material.roughness1 = 1.3;
+    material.lobeMix = 0.85;
 #endif
 
 #if defined(SHADING_MODEL_CLOTH)
