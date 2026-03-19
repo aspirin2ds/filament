@@ -213,6 +213,12 @@ fragment {
         }
 
         vec3 scatteringDelta = blurredDiffuse - centerSetupDiffuse;
+        highp vec3 lightDirView = normalize(
+                (getViewFromWorldMatrix() * vec4(frameUniforms.lightDirection, 0.0)).xyz);
+        float rawNoL = dot(centerNormal, lightDirView);
+        float shadowStart = smoothstep(-0.35, -0.02, rawNoL);
+        float litFade = 1.0 - smoothstep(0.02, 0.22, rawNoL);
+        float terminatorWindow = shadowStart * litFade;
 
         if (materialParams.debugMode == 1) {
             postProcess.color = vec4(vec3(centerMask), 1.0);
@@ -220,7 +226,7 @@ fragment {
         }
 
         float deltaMagnitude = luminance(abs(scatteringDelta));
-        float bandMask = smoothstep(0.01, 0.06, deltaMagnitude);
+        float bandMask = smoothstep(0.01, 0.06, deltaMagnitude) * terminatorWindow * centerMask;
 
         if (materialParams.debugMode == 2) {
             // The visible scatter band is the region where the blurred diffuse meaningfully differs
@@ -257,12 +263,11 @@ fragment {
             return;
         }
 
-        // Unreal-style recombine trend: blend original diffuse lighting toward the scattered result
-        // using the tint as the interpolation weight. This reshapes the terminator instead of
-        // creating a second additive hump deeper in shadow.
+        // Keep the recombine focused around the light / shadow boundary rather than letting a
+        // broad full-surface blur reshape the whole lit side.
         const float tintBoost = 1.35;
         vec3 fadedTint = saturate(materialParams.subsurfaceColor * tintBoost);
-        vec3 finalDiffuse = mix(centerSetupDiffuse, blurredDiffuse, fadedTint);
+        vec3 finalDiffuse = mix(centerSetupDiffuse, blurredDiffuse, fadedTint * terminatorWindow);
         postProcess.color = vec4(finalDiffuse + centerSpecular, centerColor.a);
     }
 }
