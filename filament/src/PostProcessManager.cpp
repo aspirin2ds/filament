@@ -1219,6 +1219,7 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::subsurfaceScatteringBlur(Fra
         FrameGraphId<FrameGraphTexture> input,
         FrameGraphId<FrameGraphTexture> diffuse,
         FrameGraphId<FrameGraphTexture> normal,
+        FrameGraphId<FrameGraphTexture> params,
         FrameGraphId<FrameGraphTexture> depth,
         const CameraInfo& cameraInfo,
         SubsurfaceScatteringOptions const& options) noexcept {
@@ -1246,6 +1247,7 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::subsurfaceScatteringBlur(Fra
         FrameGraphId<FrameGraphTexture> diffuse;
         FrameGraphId<FrameGraphTexture> setupDiffuse;
         FrameGraphId<FrameGraphTexture> normal;
+        FrameGraphId<FrameGraphTexture> params;
         FrameGraphId<FrameGraphTexture> depth;
         FrameGraphId<FrameGraphTexture> output;
     };
@@ -1254,6 +1256,7 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::subsurfaceScatteringBlur(Fra
             FrameGraphId<FrameGraphTexture> diffuseInput,
             FrameGraphId<FrameGraphTexture> setupDiffuseInput,
             FrameGraphId<FrameGraphTexture> normalInput,
+            FrameGraphId<FrameGraphTexture> paramsInput,
             FrameGraphId<FrameGraphTexture> depthInput,
             math::float2 axis, float projectedScale, int32_t passIndex, int32_t passDebugMode,
             const char* passName)
@@ -1267,6 +1270,7 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::subsurfaceScatteringBlur(Fra
                     data.diffuse = builder.sample(diffuseInput);
                     data.setupDiffuse = builder.sample(setupDiffuseInput);
                     data.normal = builder.sample(normalInput);
+                    data.params = builder.sample(paramsInput);
                     data.depth = builder.sample(depthInput);
 
                     data.output = builder.createTexture("SSS Blurred", {
@@ -1290,6 +1294,7 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::subsurfaceScatteringBlur(Fra
                     auto diffuseTex = resources.getTexture(data.diffuse);
                     auto setupDiffuseTex = resources.getTexture(data.setupDiffuse);
                     auto normalTex = resources.getTexture(data.normal);
+                    auto paramsTex = resources.getTexture(data.params);
                     auto depthTex = resources.getTexture(data.depth);
                     auto out = resources.getRenderPassInfo();
                     auto const& outDesc = resources.getDescriptor(data.output);
@@ -1311,6 +1316,10 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::subsurfaceScatteringBlur(Fra
                             .filterMin = SamplerMinFilter::LINEAR_MIPMAP_NEAREST
                     });
                     mi->setParameter("normal", normalTex, {
+                            .filterMag = SamplerMagFilter::LINEAR,
+                            .filterMin = SamplerMinFilter::LINEAR_MIPMAP_NEAREST
+                    });
+                    mi->setParameter("params", paramsTex, {
                             .filterMag = SamplerMagFilter::LINEAR,
                             .filterMin = SamplerMinFilter::LINEAR_MIPMAP_NEAREST
                     });
@@ -1340,10 +1349,10 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::subsurfaceScatteringBlur(Fra
 
     // Execute horizontal then vertical blur with per-axis projected scale
     auto intermediate = sssBlurPass(
-            fg, input, diffuse, diffuse, normal, depth, { 1.0f, 0.0f }, projectedScaleX,
+            fg, input, diffuse, diffuse, normal, params, depth, { 1.0f, 0.0f }, projectedScaleX,
             0, 0, "SSS Blur H");
     auto output = sssBlurPass(
-            fg, input, intermediate, diffuse, normal, depth, { 0.0f, 1.0f }, projectedScaleY,
+            fg, input, intermediate, diffuse, normal, params, depth, { 0.0f, 1.0f }, projectedScaleY,
             1, debugMode, "SSS Blur V");
 
     return output;

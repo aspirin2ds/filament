@@ -23,6 +23,11 @@ material {
         },
         {
             type : sampler2d,
+            name : params,
+            precision: medium
+        },
+        {
+            type : sampler2d,
             name : setupDiffuse,
             precision: medium
         },
@@ -117,29 +122,26 @@ fragment {
         return view.xyz / max(view.w, 1e-6);
     }
 
-    highp vec3 estimateViewNormal(highp vec2 uv, highp vec4 res) {
+    highp vec4 sampleStoredNormalData(highp vec2 uv) {
+        return textureLod(materialParams_normal, uv, 0.0);
+    }
+
+    highp vec3 estimateSmoothedStoredNormal(highp vec2 uv, highp vec4 res) {
         highp vec2 texel = res.zw;
-        highp vec2 uvX = clamp(uv + vec2(texel.x, 0.0), texel * 0.5, vec2(1.0) - texel * 0.5);
-        highp vec2 uvY = clamp(uv + vec2(0.0, texel.y), texel * 0.5, vec2(1.0) - texel * 0.5);
-        highp float depthC = textureLod(materialParams_depth, uv, 0.0).r;
-        highp float depthX = textureLod(materialParams_depth, uvX, 0.0).r;
-        highp float depthY = textureLod(materialParams_depth, uvY, 0.0).r;
-        highp vec3 center = reconstructViewPosition(uv, depthC);
-        highp vec3 dx = reconstructViewPosition(uvX, depthX) - center;
-        highp vec3 dy = reconstructViewPosition(uvY, depthY) - center;
-        return normalize(cross(dx, dy));
+        highp vec3 center = normalize(sampleStoredNormalData(uv).xyz) * 4.0;
+        highp vec3 x0 = normalize(sampleStoredNormalData(clamp(uv - vec2(texel.x, 0.0),
+                texel * 0.5, vec2(1.0) - texel * 0.5)).xyz);
+        highp vec3 x1 = normalize(sampleStoredNormalData(clamp(uv + vec2(texel.x, 0.0),
+                texel * 0.5, vec2(1.0) - texel * 0.5)).xyz);
+        highp vec3 y0 = normalize(sampleStoredNormalData(clamp(uv - vec2(0.0, texel.y),
+                texel * 0.5, vec2(1.0) - texel * 0.5)).xyz);
+        highp vec3 y1 = normalize(sampleStoredNormalData(clamp(uv + vec2(0.0, texel.y),
+                texel * 0.5, vec2(1.0) - texel * 0.5)).xyz);
+        return normalize(center + x0 + x1 + y0 + y1);
     }
 
     float normalWeight(highp vec3 centerNormal, highp vec3 sampleNormal) {
         return sqrt(saturate(dot(centerNormal, sampleNormal) * 0.5 + 0.5));
-    }
-
-    highp vec3 sampleStoredViewNormal(highp vec2 uv) {
-        highp vec4 stored = textureLod(materialParams_normal, uv, 0.0);
-        if (stored.a < 0.001) {
-            return vec3(0.0, 0.0, 1.0);
-        }
-        return normalize(stored.xyz);
     }
 
     void postProcess(inout PostProcessInputs postProcess) {
@@ -150,6 +152,7 @@ fragment {
         vec4 centerColor = textureLod(materialParams_color, uv, 0.0);
         vec4 centerBlurData = textureLod(materialParams_diffuse, uv, 0.0);
         vec4 centerSetupData = textureLod(materialParams_setupDiffuse, uv, 0.0);
+        vec4 centerParamsData = textureLod(materialParams_params, uv, 0.0);
         highp float centerDepth = -linearizeDepth(textureLod(materialParams_depth, uv, 0.0).r);
         float centerMask = centerSetupData.a;
 
@@ -166,13 +169,15 @@ fragment {
         vec3 centerDiffuse = recombinePass ? centerBlurData.rgb : centerSetupData.rgb;
         vec3 centerSetupDiffuse = centerSetupData.rgb;
         vec3 centerSpecular = max(centerColor.rgb - centerSetupDiffuse, vec3(0.0));
-        highp vec3 centerNormal = sampleStoredViewNormal(uv);
-        highp vec3 centerMacroNormal = estimateViewNormal(uv, res);
-
-        float sd = max(materialParams.scatteringDistance, 0.001);
+        highp vec4 centerNormalData = sampleStoredNormalData(uv);
+        highp vec3 centerNormal = normalize(centerNormalData.xyz);
+        highp vec3 centerMacroNormal = estimateSmoothedStoredNormal(uv, res);
+        float centerThickness = saturate(centerNormalData.a);
+        vec3 centerTint = saturate(centerParamsData.rgb * materialParams.subsurfaceColor);
+        float sd = max(centerParamsData.a * materialParams.scatteringDistance, 0.001);
         float s = 1.0 / sd;
 
-        // Single-radius blur kernel based on base scatteringDistance.
+        // Use the per-pixel scattering radius and keep view options as a global multiplier.
         float pixelScale = materialParams.projectedScale / centerDepth;
         float effectiveRadiusPixels = max(sd * pixelScale * 0.5, 1.0);
 
@@ -199,7 +204,7 @@ fragment {
             highp float depthP = -linearizeDepth(textureLod(materialParams_depth, uvP, 0.0).r);
             float bilateralP = depthWeight(centerDepth, depthP, depthThreshold);
             float maskP = diffuseDataP.a;
-            highp vec3 normalP = estimateViewNormal(uvP, res);
+            highp vec3 normalP = estimateSmoothedStoredNormal(uvP, res);
             float wP = kernelWeight * bilateralP * normalWeight(centerMacroNormal, normalP) * maskP;
             vec3 diffuseP = diffuseDataP.rgb;
             totalDiffuse += diffuseP * wP;
@@ -211,7 +216,7 @@ fragment {
             highp float depthN = -linearizeDepth(textureLod(materialParams_depth, uvN, 0.0).r);
             float bilateralN = depthWeight(centerDepth, depthN, depthThreshold);
             float maskN = diffuseDataN.a;
-            highp vec3 normalN = estimateViewNormal(uvN, res);
+            highp vec3 normalN = estimateSmoothedStoredNormal(uvN, res);
             float wN = kernelWeight * bilateralN * normalWeight(centerMacroNormal, normalN) * maskN;
             vec3 diffuseN = diffuseDataN.rgb;
             totalDiffuse += diffuseN * wN;
@@ -225,27 +230,56 @@ fragment {
             return;
         }
 
-        vec3 scatteringDelta = blurredDiffuse - centerSetupDiffuse;
         highp vec3 lightDirView = normalize(
                 (getViewFromWorldMatrix() * vec4(frameUniforms.lightDirection, 0.0)).xyz);
+        highp vec2 texel = res.zw;
         float rawNoL = dot(centerMacroNormal, lightDirView);
-        float shadowStart = smoothstep(-0.35, -0.02, rawNoL);
-        float litFade = 1.0 - smoothstep(0.02, 0.22, rawNoL);
-        float terminatorWindow = shadowStart * litFade;
+        float rawNoLX0 = dot(estimateSmoothedStoredNormal(clamp(uv - vec2(texel.x, 0.0),
+                texel * 0.5, vec2(1.0) - texel * 0.5), res), lightDirView);
+        float rawNoLX1 = dot(estimateSmoothedStoredNormal(clamp(uv + vec2(texel.x, 0.0),
+                texel * 0.5, vec2(1.0) - texel * 0.5), res), lightDirView);
+        float rawNoLY0 = dot(estimateSmoothedStoredNormal(clamp(uv - vec2(0.0, texel.y),
+                texel * 0.5, vec2(1.0) - texel * 0.5), res), lightDirView);
+        float rawNoLY1 = dot(estimateSmoothedStoredNormal(clamp(uv + vec2(0.0, texel.y),
+                texel * 0.5, vec2(1.0) - texel * 0.5), res), lightDirView);
+        rawNoL = (rawNoL * 4.0 + rawNoLX0 + rawNoLX1 + rawNoLY0 + rawNoLY1) / 8.0;
+        highp vec3 centerViewPos = reconstructViewPosition(
+                uv, textureLod(materialParams_depth, uv, 0.0).r);
+        highp vec3 viewDir = normalize(-centerViewPos);
+        float NoV = saturate(abs(dot(centerMacroNormal, viewDir)));
+        float edgeAttenuation = smoothstep(0.08, 0.35, NoV);
+        float faceWidth = mix(0.10, 0.24, NoV);
+        float shadowWidth = mix(0.16, 0.30, NoV);
+        float litWidth = mix(0.06, 0.16, NoV);
+        float terminatorCore = 1.0 - smoothstep(0.0, faceWidth, abs(rawNoL));
+        float litSupport = 1.0 - smoothstep(0.02, litWidth, rawNoL);
+        float shadowSupport = smoothstep(-shadowWidth, -0.02, rawNoL);
+        float terminatorWindow = saturate(
+                (terminatorCore + 0.30 * litSupport + 0.18 * shadowSupport) * edgeAttenuation);
 
         if (materialParams.debugMode == 1) {
             postProcess.color = vec4(vec3(centerMask), 1.0);
             return;
         }
 
-        float deltaMagnitude = luminance(abs(scatteringDelta));
-        float bandMask = smoothstep(0.01, 0.06, deltaMagnitude) * terminatorWindow * centerMask;
+        float tintAmount = saturate(max(centerTint.r, max(centerTint.g, centerTint.b)));
+        float scatterAmount = smoothstep(0.01, 0.35, sd) * centerMask;
+        float faceBoost = smoothstep(0.22, 0.88, NoV);
+        float bandStrength = scatterAmount * mix(0.70, 1.35, faceBoost);
+        vec3 lowFrequencyDiffuse = blurredDiffuse;
+        vec3 highFrequencyResidual = centerSetupDiffuse - blurredDiffuse;
+        vec3 tintedLowFrequency = lowFrequencyDiffuse * mix(vec3(1.0), centerTint * 1.25,
+                bandStrength * tintAmount);
+        vec3 recombinedDiffuse = max(highFrequencyResidual + tintedLowFrequency, vec3(0.0));
+        vec3 terminatorDiffuse = mix(centerSetupDiffuse, recombinedDiffuse,
+                terminatorWindow * bandStrength);
+
+        float deltaMagnitude = luminance(abs(terminatorDiffuse - centerSetupDiffuse));
+        float influenceMask = smoothstep(0.002, 0.03, deltaMagnitude) * centerMask;
 
         if (materialParams.debugMode == 2) {
-            // The visible scatter band is the region where the blurred diffuse meaningfully differs
-            // from the center sample. Use the absolute delta here so the debug view tracks the full
-            // terminator reshaping rather than only positive additive lift.
-            vec3 debugColor = mix(vec3(0.0), vec3(1.0, 0.3, 0.05), bandMask);
+            vec3 debugColor = vec3(1.0, 0.35, 0.08) * influenceMask;
+            debugColor += max(terminatorDiffuse - centerSetupDiffuse, vec3(0.0)) * 2.0;
             postProcess.color = vec4(debugColor, 1.0);
             return;
         }
@@ -261,27 +295,32 @@ fragment {
         }
 
         if (materialParams.debugMode == 5) {
-            float depthVis = saturate(centerDepth / max(materialParams.cameraFar, 0.001));
-            postProcess.color = vec4(vec3(depthVis), 1.0);
+            postProcess.color = vec4(vec3(terminatorWindow), 1.0);
             return;
         }
 
         if (materialParams.debugMode == 6) {
-            postProcess.color = vec4(centerNormal * 0.5 + 0.5, 1.0);
+            postProcess.color = vec4(vec3(influenceMask), 1.0);
             return;
         }
+
+        // Thin-region transmission is a distinct backlit contribution layered on top of the
+        // laterally scattered diffuse. The lack of a thickness texture means we approximate it
+        // from the material thickness plus geometric silhouette and backlighting.
+        float silhouette = pow(1.0 - NoV, 3.5);
+        float backlight = smoothstep(0.08, 0.7, -rawNoL);
+        float thinRegion = 1.0 - centerThickness;
+        float transmissionStrength = backlight * silhouette * thinRegion * centerMask;
+        transmissionStrength *= smoothstep(0.05, 0.35, sd);
+        transmissionStrength *= 0.35 + 0.65 * (1.0 - edgeAttenuation);
+        vec3 transmission = centerTint * transmissionStrength * 0.45;
 
         if (materialParams.debugMode == 7) {
-            postProcess.color = vec4(vec3(bandMask), 1.0);
+            postProcess.color = vec4(transmission, 1.0);
             return;
         }
 
-        // Recombine only the positive scattering lift. Mixing directly toward the fully blurred
-        // diffuse causes broad contour-like darkening and over-spreads the effect at large radii.
-        const float tintBoost = 1.35;
-        vec3 fadedTint = saturate(materialParams.subsurfaceColor * tintBoost);
-        vec3 positiveDelta = max(scatteringDelta, vec3(0.0));
-        vec3 finalDiffuse = centerSetupDiffuse + positiveDelta * fadedTint * bandMask;
+        vec3 finalDiffuse = terminatorDiffuse + transmission;
         postProcess.color = vec4(finalDiffuse + centerSpecular, centerColor.a);
     }
 }

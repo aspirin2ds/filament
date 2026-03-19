@@ -81,31 +81,25 @@ constexpr float PI_F = 3.14159265358979323846f;
 
 enum class DebugView : int {
     FINAL = 0,
-    DIFFUSE_ONLY,
-    SPECULAR_ONLY,
-    SCATTERING_DISTANCE_VIS,
-    THICKNESS_VIS,
     SSS_MEMBERSHIP,
     SSS_INFLUENCE,
     PRE_BLUR_DIFFUSE,
     POST_BLUR_DIFFUSE,
-    DEPTH,
-    NORMAL,
+    TERMINATOR_WINDOW,
+    BAND_MASK,
+    TRANSMISSION,
     COUNT
 };
 
 constexpr std::array<const char*, size_t(DebugView::COUNT)> DEBUG_VIEW_NAMES = {{
     "Final",
-    "Diffuse Only",
-    "Specular Only",
-    "Scattering Distance View",
-    "Thickness View",
     "SSS Membership",
     "SSS Influence",
     "Pre-Blur Diffuse",
     "Post-Blur Diffuse",
-    "Depth",
-    "Normal"
+    "Terminator Window",
+    "Band Mask",
+    "Transmission"
 }};
 
 struct BurleyPreset {
@@ -242,16 +236,15 @@ struct ComparisonArtifact {
     const char* slug;
 };
 
-constexpr std::array<ComparisonArtifact, 9> COMPARISON_ARTIFACTS = {{
+constexpr std::array<ComparisonArtifact, 8> COMPARISON_ARTIFACTS = {{
     { DebugView::FINAL, "Final", "final" },
-    { DebugView::DIFFUSE_ONLY, "Diffuse Only", "diffuse_only" },
-    { DebugView::SPECULAR_ONLY, "Specular Only", "specular_only" },
     { DebugView::SSS_INFLUENCE, "SSS Influence", "sss_influence" },
     { DebugView::SSS_MEMBERSHIP, "SSS Membership", "sss_membership" },
-    { DebugView::DEPTH, "Depth", "depth" },
-    { DebugView::NORMAL, "Normal", "normal" },
     { DebugView::PRE_BLUR_DIFFUSE, "Pre-Blur Diffuse", "pre_blur_diffuse" },
-    { DebugView::POST_BLUR_DIFFUSE, "Post-Blur Diffuse", "post_blur_diffuse" }
+    { DebugView::POST_BLUR_DIFFUSE, "Post-Blur Diffuse", "post_blur_diffuse" },
+    { DebugView::TERMINATOR_WINDOW, "Terminator Window", "terminator_window" },
+    { DebugView::BAND_MASK, "Band Mask", "band_mask" },
+    { DebugView::TRANSMISSION, "Transmission", "transmission" }
 }};
 
 struct GapRow {
@@ -275,10 +268,10 @@ constexpr std::array<GapRow, 16> GAP_ROWS = {{
     {
         "pre-blur setup buffer contents",
         "Setup stores Burley-ready diffuse plus profile metadata.",
-        "Diffuse.rgb plus membership alpha is stored, but not the full profile payload.",
-        "Blur can run on the right pixels but still relies on view-global Burley parameters.",
-        "Only one auxiliary MRT is used today.",
-        "Extend setup to pack per-pixel profile id, tint, and radius inputs."
+        "Diffuse.rgb plus membership alpha is stored alongside per-pixel Burley tint/radius and thickness context.",
+        "Blur now reads real per-pixel Burley params instead of one shared view-global profile.",
+        "Broad interior scatter can be driven from material data rather than a contour seed alone; profile ids and boundary bleed are still not part of the payload.",
+        "Only add profile id / bleed if mixed-profile scenes actually require it."
     },
     {
         "per-pixel SSS membership",
@@ -291,18 +284,18 @@ constexpr std::array<GapRow, 16> GAP_ROWS = {{
     {
         "per-pixel scattering parameters",
         "Mean free path and tint are resolved per pixel via the subsurface profile system.",
-        "Still view-global through View::SubsurfaceScatteringOptions.",
-        "All SSS pixels share one scattering distance and one tint in the blur pass.",
-        "Current pipeline does not serialize Burley profile data into the setup buffer.",
-        "Store per-pixel scattering scale, tint, and profile id in the auxiliary target."
+        "Implemented via per-pixel auxiliary Burley params, with View::SubsurfaceScatteringOptions acting as a multiplier/default.",
+        "Different Burley materials can now carry different radius and tint values through the same blur pass, though profile ids are still absent if they overlap in screen space.",
+        "Current scope targets Filament-first material parity rather than full Unreal profile assets.",
+        "Validate mixed-material scenes before adding profile-id rejection."
     },
     {
         "world-unit kernel scaling",
         "Kernel radius derives from mean free path distance and world unit scale.",
-        "Only a single global projected radius is used.",
-        "Reference preset can drift when asset scale changes.",
-        "World unit scale is tracked in the sample but not consumed by the engine path.",
-        "Move world-unit scaling into the per-pixel Burley parameter block."
+        "Projected radius is still screen-space, but now scaled by per-pixel scattering distance before the view-global multiplier.",
+        "Sample presets map more directly into the engine path, though no explicit world-unit field is stored in the SSS payload and scene-scale mismatch can still drift if radius authoring is inconsistent.",
+        "World unit scale is still folded into material/sample setup rather than stored independently.",
+        "Only add an explicit world-unit field if real content shows scale inconsistency."
     },
     {
         "Burley kernel shape",
@@ -331,10 +324,10 @@ constexpr std::array<GapRow, 16> GAP_ROWS = {{
     {
         "recombine formula",
         "Burley adds scattered diffuse back to untouched non-SSS lighting.",
-        "Implemented as original diffuse plus positive scattering delta tinted by subsurface color.",
-        "Avoids full-model washout and makes the band visible in the final view.",
-        "Previous path used fully blurred diffuse directly.",
-        "Validate the delta scale against Unreal's profile tuning once per-pixel tint arrives."
+        "Implemented as original diffuse plus positive scattering delta tinted by the per-pixel Burley params, with a separate thin-region transmission lift.",
+        "Final shading reads less like a rim blur and more like broad interior diffusion plus backlit translucency, fixing the earlier contour-specific gating problem.",
+        "Transmission is still approximated from thickness and geometry rather than a full profile model.",
+        "Tune transmission strength and mixed-material behavior against captures before adding more profile complexity."
     },
     {
         "base color application point",
@@ -355,10 +348,10 @@ constexpr std::array<GapRow, 16> GAP_ROWS = {{
     {
         "transmission / thickness lighting",
         "Transmission is handled separately from lateral surface blur.",
-        "Thickness exists as a material input, but Burley transmission parity is not implemented.",
-        "Backscatter behavior is not comparable yet.",
-        "Current work focused on the screen-space surface band first.",
-        "Add a dedicated transmission stage and compare it independently from the blur."
+        "Implemented as a distinct recombine-stage backlight / silhouette lift driven by thickness, geometry, and Burley tint.",
+        "Ears and other thin regions can now pick up a separate translucent glow from the main blur lobe, though it is still an approximation rather than full Unreal transmission parity.",
+        "No dedicated thickness texture or full profile transmission block exists yet.",
+        "Tune against thin-region captures before deciding whether a richer transmission payload is necessary."
     },
     {
         "multi-material profile handling",
@@ -552,10 +545,12 @@ SubsurfaceScatteringDebugMode toSssDebugMode(DebugView view) {
             return SubsurfaceScatteringDebugMode::PRE_BLUR_DIFFUSE;
         case DebugView::POST_BLUR_DIFFUSE:
             return SubsurfaceScatteringDebugMode::POST_BLUR_DIFFUSE;
-        case DebugView::DEPTH:
-            return SubsurfaceScatteringDebugMode::DEPTH;
-        case DebugView::NORMAL:
-            return SubsurfaceScatteringDebugMode::NORMAL;
+        case DebugView::TERMINATOR_WINDOW:
+            return SubsurfaceScatteringDebugMode::TERMINATOR_WINDOW;
+        case DebugView::BAND_MASK:
+            return SubsurfaceScatteringDebugMode::BAND_MASK;
+        case DebugView::TRANSMISSION:
+            return SubsurfaceScatteringDebugMode::TRANSMISSION;
         default:
             return SubsurfaceScatteringDebugMode::NONE;
     }
@@ -615,6 +610,8 @@ void writeComparisonMetadata(App const& app, View const* view) {
     out << "  \"meanFreePathColor\": " << vectorToJson(app.meanFreePathColor) << ",\n";
     out << "  \"meanFreePathDistance\": " << app.meanFreePathDistance << ",\n";
     out << "  \"worldUnitScale\": " << app.worldUnitScale << ",\n";
+    out << "  \"viewScatteringDistanceMultiplier\": " << app.scatteringDistance << ",\n";
+    out << "  \"viewSubsurfaceColorMultiplier\": " << vectorToJson(app.subsurfaceColor) << ",\n";
     out << "  \"tint\": " << vectorToJson(app.tint) << ",\n";
     out << "  \"boundaryColorBleed\": " << vectorToJson(app.boundaryColorBleed) << ",\n";
     out << "  \"extinctionScale\": " << app.extinctionScale << ",\n";
@@ -624,7 +621,8 @@ void writeComparisonMetadata(App const& app, View const* view) {
     out << "  \"roughness0\": " << app.roughness0 << ",\n";
     out << "  \"roughness1\": " << app.roughness1 << ",\n";
     out << "  \"lobeMix\": " << app.lobeMix << ",\n";
-    out << "  \"transmissionTintColor\": " << vectorToJson(app.transmissionTintColor) << "\n";
+    out << "  \"transmissionTintColor\": " << vectorToJson(app.transmissionTintColor) << ",\n";
+    out << "  \"thinRegionTransmission\": true\n";
     out << "}\n";
 }
 
@@ -643,12 +641,12 @@ void writeComparisonReport(App const& app) {
     out << "| Unreal Burley term | Filament current mapping | Status |\n";
     out << "| --- | --- | --- |\n";
     out << "| Surface Albedo | `baseColor` material parameter | Approximate |\n";
-    out << "| Mean Free Path Color | `subsurfaceColor` sample parameter | Approximate |\n";
-    out << "| Mean Free Path Distance | `scatteringDistance = meanFreePathDistance * worldUnitScale` | Approximate |\n";
-    out << "| World Unit Scale | tracked in sample metadata only | Missing in engine |\n";
-    out << "| Tint | tracked in sample metadata only | Missing in engine |\n";
+    out << "| Mean Free Path Color | material `subsurfaceColor`, with view color acting as a multiplier/default | Approximate |\n";
+    out << "| Mean Free Path Distance | material `scatteringDistance`, with view distance acting as a multiplier/default | Approximate |\n";
+    out << "| World Unit Scale | folded into the authored/sample scattering distance | Approximate |\n";
+    out << "| Tint | per-pixel Burley params target | Implemented |\n";
     out << "| Boundary Color Bleed | tracked in sample metadata only | Missing in engine |\n";
-    out << "| Transmission block | thickness exists, Burley transmission parity missing | Missing |\n";
+    out << "| Transmission block | separate thin-region transmission lift driven by thickness and Burley tint | Approximate |\n";
     out << "| Dual Specular | untouched default lit specular path | Missing |\n\n";
 
     out << "## Artifact Grid\n\n";
@@ -669,9 +667,9 @@ void writeComparisonReport(App const& app) {
             << row.rootCause << " | " << row.fixPlan << " |\n";
     }
     out << "\n## Next Action\n\n";
-    out << "Promote the setup buffer from `diffuse + membership` to full per-pixel Burley profile "
-           "data so kernel radius, tint, and boundary behavior stop depending on view-global "
-           "options.\n";
+    out << "Validate the new per-pixel Burley payload on mixed-material scenes, then decide "
+           "whether profile ids, boundary color bleed, or richer transmission controls are the "
+           "next highest-value parity step.\n";
 }
 
 void applyViewpoint(App& app) {
@@ -696,43 +694,6 @@ void applyMaterialDebugView(App& app) {
     mi->setParameter("scatteringDistance", app.scatteringDistance);
     mi->setParameter("subsurfaceColor", app.subsurfaceColor);
     mi->setParameter("emissive", app.emissive);
-
-    switch (app.debugView) {
-        case DebugView::DIFFUSE_ONLY:
-            mi->setParameter("metallic", 0.0f);
-            mi->setParameter("emissive", float4{ 0.0f });
-            break;
-        case DebugView::SPECULAR_ONLY:
-            mi->setParameter("baseColor", float3{ 0.0f });
-            mi->setParameter("metallic", 1.0f);
-            mi->setParameter("emissive", float4{ 0.0f });
-            break;
-        case DebugView::SCATTERING_DISTANCE_VIS:
-            mi->setParameter("baseColor", float3{
-                app.scatteringDistance / 0.5f,
-                app.scatteringDistance / 0.5f,
-                app.scatteringDistance / 0.5f
-            });
-            mi->setParameter("metallic", 0.0f);
-            mi->setParameter("emissive", float4{
-                app.scatteringDistance / 0.5f,
-                1.0f - app.scatteringDistance / 0.5f,
-                0.0f,
-                1.0f
-            });
-            break;
-        case DebugView::THICKNESS_VIS:
-            mi->setParameter("baseColor", float3{ 0.0f });
-            mi->setParameter("emissive", float4{
-                app.thickness,
-                app.thickness,
-                app.thickness,
-                1.0f
-            });
-            break;
-        default:
-            break;
-    }
 }
 
 void applyViewOptions(App& app) {
