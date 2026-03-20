@@ -786,10 +786,19 @@ void FRenderer::renderJob(DriverApi& driver, RootArenaScope& rootArenaScope, FVi
     // by construction (msaaSampleCount) both asSubpass and customResolve can't be true
     assert_invariant(colorGradingConfig.asSubpass + colorGradingConfig.customResolve < 2);
 
+    // Burley SSS is implemented as a post-process blur / recombine path, so it must follow the
+    // same high-level capability gating as the rest of post-processing. It also depends on an
+    // RGBA16F main color target, so keep the renderer's existing HDR fallback behavior by
+    // disabling Burley on backends that cannot render to RGBA16F.
+    const bool burleySssEnabled = sssOptions.enabled &&
+            hasPostProcess &&
+            !isRenderingMultiview &&
+            driver.isRenderTargetFormatSupported(TextureFormat::RGBA16F);
+
     // color-grading as subpass is done either by the color pass or the TAA pass if any.
     auto colorGradingConfigForColor = colorGradingConfig;
     colorGradingConfigForColor.asSubpass = colorGradingConfigForColor.asSubpass && !taaOptions.enabled;
-    if (sssOptions.enabled) {
+    if (burleySssEnabled) {
         colorGradingConfigForColor.asSubpass = false;
         colorGradingConfigForColor.customResolve = false;
     }
@@ -1040,7 +1049,7 @@ void FRenderer::renderJob(DriverApi& driver, RootArenaScope& rootArenaScope, FVi
 
     // SSS Burley needs RGBA so we can keep the main color buffer sampleable while emitting
     // a diffuse+mask auxiliary MRT during the color pass.
-    if (sssOptions.enabled) {
+    if (burleySssEnabled) {
         hdrFormat = TextureFormat::RGBA16F;
     }
 
@@ -1063,7 +1072,7 @@ void FRenderer::renderJob(DriverApi& driver, RootArenaScope& rootArenaScope, FVi
             .featureLevel = mFeatureLevel,
             .isAutoDepthResolveSupported = mIsAutoDepthResolveSupported,
             .fogAsPostProcess = view.hasFog() && engine.features.material.enable_fog_as_postprocess,
-            .hasSubsurfaceScattering = sssOptions.enabled,
+            .hasSubsurfaceScattering = burleySssEnabled,
     };
 
     /*
@@ -1379,7 +1388,7 @@ void FRenderer::renderJob(DriverApi& driver, RootArenaScope& rootArenaScope, FVi
 
     // Screen-space subsurface scattering blur (Burley normalized diffusion).
     // Applied before TAA so the stochastic noise can be resolved by the temporal filter.
-    if (sssOptions.enabled) {
+    if (burleySssEnabled) {
         input = ppm.subsurfaceScatteringBlur(
                 fg, input, colorPassOutput.sssDiffuse, colorPassOutput.sssNormal,
                 colorPassOutput.sssParams,
