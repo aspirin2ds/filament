@@ -222,23 +222,62 @@ Preferred order:
 
 Avoid tweaking recombine to hide missing per-pixel setup data.
 
+## Band Math Parity Summary (verified 2026-03-22)
+
+The following core math is **identical** between Filament and Unreal and does not need patching:
+
+- **Diffusion profile R(r)**: `s/(8π·r)·(exp(-s·r) + exp(-s·r/3))`, `s=1/d`
+  - Filament: `sssBlur.mat:48-52` (`burleyProfile3`)
+  - Unreal: `BurleyNormalizedSSSCommon.ush:10-16` (`Burley_Profile`)
+- **Scaling factors S(A)**: SearchLight `3.5+100·(A-0.33)⁴`, Perpendicular `1.85-A+7·|A-0.8|³`
+  - Filament: `sssBlur.mat:82-95`
+  - Unreal: `BurleyNormalizedSSSCommon.ush:56-95`
+- **DMFP→MFP conversion**: `0.6 · Perp(A)/Search(A) · dmfp`
+  - Filament: `sssBlur.mat:92-95` (`getMfpFromDmfpApprox`)
+  - Unreal: `BurleyNormalizedSSSCommon.ush:105-113` (`GetMFPFromDMFPCoeff`)
+- **CDF / CDF⁻¹ / PDF**: `CDF(r) = 1-0.25·exp(-r/d)-0.75·exp(-r/(3d))`, analytic inverse via `G=1+4U(2U+√(1+4U²))`
+  - Filament: `sssBlur.mat:56-80`
+  - Unreal: `BurleyNormalizedSSSCommon.ush:154-197`
+- **Normal bilateral weight**: `sqrt(saturate(dot(N_c, N_s)·0.5+0.5))`
+  - Filament: `sssBlur.mat:125-127`
+  - Unreal: `SubsurfaceBurleyNormalized.ush:935`
+- **Per-channel RGB weighting**: both evaluate profile with per-channel D (vec3) and divide by scalar PDF from dominant channel
+  - Filament: `sssBlur.mat:188-190` — `kernelWeight = burleyProfile3(r, centerD) / pdf(r, dominantD)`
+  - Unreal: `SubsurfaceBurleyNormalized.ush:961-962` — `DiffusionProfile(L.xyz, S3D.xyz, r) / Pdf`
+
 ## Current Known Gaps
 
 Use this as the default starting checklist, but re-verify each item against source before editing.
+
+### Gap Table
+
+| Behavior | Unreal reference | Filament current | Symptom | Root cause | Patch location | Bucket |
+|---|---|---|---|---|---|---|
+| 2D disc vs separable blur | Monte Carlo disc: random `(radius, angle)` over 2D disc, 16-256 taps (`SubsurfaceBurleyNormalized.ush:862-971`) | Separable H+V: stratified 1D `xi=i/(N+1)`, symmetric ±offset (`sssBlur.mat:179-234`) | Possible axis-aligned scatter artifacts | Architectural choice — separable is 2× cheaper but approximate for non-Gaussian kernels | `sssBlur.mat` blur loop | blur kernel / sampling |
+| Bilateral depth rejection | 3D Euclidean radius correction: `R3D = √(R2D² + Δdepth²)` → profile re-eval at R3D (`SubsurfaceBurleyNormalized.ush:944-945`) | Linear depth ramp: `saturate(1 - \|Δdepth\| / (supportRadius·3))` (`sssBlur.mat:205-206`) | Over-rejection on gentle curves, under-rejection on steep depth gaps | Missing 3D radius correction — linear heuristic instead of physics-based re-eval | `sssBlur.mat:195-206` | bilateral rejection |
+| Center sample reweighting | CDF-split: center covers `[0, CDF(R_center)]`, scatter covers `[CDF(R_center), 1]`, lerp blend (`SubsurfaceBurleyNormalized.ush:838-860, 989-991`) | Center = weight `vec3(1.0)`, no CDF split (`sssBlur.mat:175-176`) | Slight center bias — scatter contribution underweighted relative to center | No CDF-based center reweighting | `sssBlur.mat:175-176` | blur kernel / sampling |
+| Boundary color bleed | Per-profile `BoundaryColorBleed` tints cross-profile contributions (`SubsurfaceBurleyNormalized.ush:956, 987`) | `boundaryColorBleed` param exists in `.mat` but is **unused** in blur loop | Uncontrolled color bleeding across different SSS materials | Param wired but not consumed | `sssBlur.mat` blur loop | missing feature |
+| Per-pixel profile ID | Profile texture lookup per pixel via `SubsurfaceProfileInt` (`SubsurfaceBurleyNormalized.ush:797-798`) | All SSS pixels share one global blur config from `SubsurfaceScatteringOptions` | Multi-material scenes get same scatter radius/tint | No profile-id MRT channel, no per-pixel DMFP/albedo lookup | `surface_main.fs`, `sssBlur.mat` | parameterization |
+| Per-pixel scattering params | Per-profile `DiffuseMeanFreePath` (vec4 RGB+sampling), `SurfaceAlbedo` (vec4) from profile texture | Global `scatteringDistance` × per-pixel scalar, global `subsurfaceColor` × per-pixel tint | Different body parts cannot have different scatter radii | View-global params, no profile texture | `Options.h`, `PostProcessManager.cpp`, `sssBlur.mat` | parameterization |
+| Energy normalization | `1/0.99995` correction factor + CDF-split center reweighting (`SubsurfaceBurleyNormalized.ush:974-984`) | `totalDiffuse / max(totalWeight, 1e-4)` — no energy correction factor | Minor energy loss (~0.005%) | Missing compensation constant | `sssBlur.mat:237` | blur kernel / sampling |
+| Transmission model | Full Burley transmission: `0.25·A·(exp(-S·r) + 3·exp(-S·r/3))` with MFP scale factor 100× and 32-sample LUT (`BurleyNormalizedSSSCommon.ush:270-317`) | Thin-region transmission approximation in recombine | Less accurate back-scattering, especially for thicker geometry | Simplified transmission model | `sssBlur.mat` recombine | missing feature |
+| Dual specular profile | Per-profile dual-spec controls stored in profile texture (`SubsurfaceProfileCommon.ush` at `SSSS_DUAL_SPECULAR_OFFSET`) | `burleyDualSpecularLobe` exists with hardcoded roughness 0.75/1.3 (`surface_brdf.fs:266-293`) | No artist control over specular lobe mix | Hardcoded dual-spec params, no profile texture | `surface_brdf.fs`, `surface_material_inputs.fs` | missing feature |
+| Half-res / quality variants | Half-res option, quality-adaptive sample count, mip-level selection (`SubsurfaceBurleyNormalized.ush:917-922`) | Full-resolution only, user-configurable sample count | Higher cost on mobile, no automatic LOD | Missing half-res path and mip selection | `PostProcessManager.cpp` | missing feature |
+| TAA-aware quality | Temporal variance tracking, history-based sample reuse (`SubsurfaceBurleyNormalized.ush:1006+`) | Blur before TAA, no variance tracking | No temporal amortization of scatter noise | Missing temporal feedback loop | `Renderer.cpp` scheduling | missing feature |
 
 ### A. Diffuse/specular separation is implemented, but profile payload is still incomplete
 
 Current Filament state:
 
-- auxiliary diffuse MRT exists
-- specular is preserved during recombine
-- setup buffer still carries only:
-  diffuse RGB + membership alpha
+- auxiliary diffuse MRT exists (4 targets: diffuse+mask, normal+thickness, params, albedo)
+- specular is preserved during recombine via `max(centerColor - centerSetupDiffuse, 0)`
+- per-pixel params MRT carries `subsurfaceColor.rgb` + `scatteringDistance` scalar
+- blur still multiplies per-pixel values by **view-global** `scatteringDistance` and `subsurfaceColor`
 
 Real remaining gap:
 
-- no full per-pixel Burley profile payload yet
-- blur still depends on view-global `scatteringDistance` and `subsurfaceColor`
+- no profile-id or profile-texture lookup — all pixels share one global multiplier
+- per-pixel `scatteringDistance` (scalar) × global scalar is less expressive than UE's per-profile vec4 DMFP
 
 Primary bucket:
 
@@ -252,87 +291,122 @@ Likely patch area:
 - `filament/src/PostProcessManager.cpp`
 - `filament/src/materials/sss/sssBlur.mat`
 
-### B. Per-pixel scattering parameters are still missing
+### B. Per-pixel scattering parameters are partially implemented
 
-Unreal resolves profile-driven radius and tint per pixel.
+Unreal resolves profile-driven radius and tint per pixel from a profile texture indexed by profile ID.
 
 Current Filament state:
 
-- `View::SubsurfaceScatteringOptions` provides global `scatteringDistance`
-- `View::SubsurfaceScatteringOptions` provides global `subsurfaceColor`
-- all SSS pixels share those blur parameters
+- per-pixel: `subsurfaceColor` (vec3) and `scatteringDistance` (float) written to params MRT (`surface_main.fs` fragColor3)
+- per-pixel: `surfaceAlbedo` (vec3) written to albedo MRT (`surface_main.fs` fragColor4)
+- blur computes per-pixel `centerD = centerTint * scaledSd / SearchLightS(albedo)` — this is correct per-pixel math
+- **but**: `scaledSd = centerParamsData.a * materialParams.scatteringDistance * materialParams.worldUnitScale` — the global multipliers mean all materials share the same base scale
 
 Primary bucket:
 
 - parameterization
 
-### C. World-unit scaling is only tracked in the sample
+### C. World-unit scaling is consumed in the blur path
 
-Current Filament state:
+Current Filament state (updated):
 
-- sample metadata stores `worldUnitScale`
-- the engine path does not serialize or consume it per pixel
-- blur radius uses projected scale plus global scattering distance only
+- `worldUnitScale` is a material parameter on `sssBlur.mat` (line 15)
+- it is consumed in the blur: `scaledSd = sd * materialParams.worldUnitScale` (line 159)
+- `PostProcessManager.cpp` sets it from `SubsurfaceScatteringOptions::worldUnitScale`
+- this is a view-global value, not per-profile
 
 Primary bucket:
 
-- parameterization
-- blur kernel / sampling
+- parameterization (view-global, not per-profile)
 
 ### D. Multi-profile / profile-id handling is missing
 
 Current Filament state:
 
-- membership exists
-- profile identity does not
-- different Burley materials would share one global blur profile
+- membership mask exists (via `g_sssMask` alpha)
+- profile identity does not — no profile-id channel in MRT
+- different Burley materials share one global blur profile
+- UE stores profile ID per pixel and looks up DMFP, albedo, boundary bleed per profile
 
 Primary bucket:
 
 - reconstruction / context
 - missing feature
 
-### E. Boundary color bleed is not implemented
+### E. Boundary color bleed param exists but is not consumed
 
 Current Filament state:
 
-- tracked in sample metadata only
-- not used in blur weighting or recombine
+- `boundaryColorBleed` declared as material parameter in `sssBlur.mat` (line 22)
+- set from `SubsurfaceScatteringOptions::boundaryColorBleed` in `PostProcessManager.cpp`
+- **not read or used anywhere in the blur loop** (`sssBlur.mat:129-256`)
+- UE multiplies `BoundaryColorBleedAccum` into final result (`SubsurfaceBurleyNormalized.ush:987`)
 
 Primary bucket:
 
 - missing feature
 
-### F. Normals come from a stored SSS normal buffer
+### F. Bilateral depth uses linear ramp instead of 3D radius correction
 
 Current Filament state:
 
-- blur uses the stored shaded normal buffer
-- weighting and recombine now follow the same normal-map detail as the material shading path
+- `depthWeightP = saturate(1.0 - deltaDepthP / depthFalloff)` where `depthFalloff = supportRadius * 3.0`
+- this is a soft linear ramp that rejects hard edges
+- UE instead computes `R3D = sqrt(R2D² + Δdepth²)` and re-evaluates the Burley profile at R3D
+- UE's approach is more physically correct: the profile's own exponential decay handles curvature naturally
+
+Validation focus: compare blur falloff near ears, nose bridge, and other high-curvature regions.
+
+Primary bucket:
+
+- bilateral rejection
+
+### G. Center sample reweighting is missing
+
+Current Filament state:
+
+- center pixel enters the accumulator as `totalDiffuse = centerDiffuse`, `totalWeight = vec3(1.0)` — flat weight
+- UE splits the CDF: center covers `[0, CDF(R_center)]`, scatter covers `[CDF(R_center), 1]`
+- UE then lerps: `lerp(scattered, center, CenterSampleWeight)` for unbiased blending
+- without this, Filament's blur is slightly biased toward the center pixel
+
+Primary bucket:
+
+- blur kernel / sampling
+
+### H. Normals come from a stored SSS normal buffer — parity OK
+
+Current Filament state:
+
+- blur uses the stored shaded normal buffer (fragColor2)
+- 5-tap `estimateSmoothedStoredNormal` averages macro normals to suppress high-frequency detail
+- normal bilateral formula matches UE exactly
 - validation should focus on thin detail and grazing-angle behavior
 
 Primary bucket:
 
-- reconstruction / context
+- reconstruction / context (low priority — functionally correct)
 
-### G. Transmission parity is approximate
+### I. Transmission parity is approximate
 
 Current Filament state:
 
 - material thickness exists
 - a thin-region transmission term exists in recombine
-- it is still an approximation of Unreal's fuller transmission/profile model
+- UE uses full Burley transmission: `0.25·A·(exp(-S·r) + 3·exp(-S·r/3))` with 32-sample LUT and `TransmissionMFPScaleFactor=100`
+- Filament's approximation is simpler
 
 Primary bucket:
 
 - missing feature
 
-### H. Dual specular parity is missing
+### J. Dual specular parity — hardcoded, not profile-driven
 
 Current Filament state:
 
-- specular preservation exists
-- Unreal-style dual-spec profile controls do not
+- `burleyDualSpecularLobe` exists (`surface_brdf.fs:266-293`) with roughness 0.75/1.3
+- these are hardcoded defaults, not exposed as per-profile controls
+- UE stores dual-specular params in the profile texture
 
 Primary bucket:
 
@@ -340,22 +414,24 @@ Primary bucket:
 
 Do not collapse this into blur fixes unless the task explicitly asks for it.
 
-### I. Half-res / quality variants are missing
+### K. Half-res / quality variants are missing
 
 Current Filament state:
 
 - only the full-resolution separable path is present
+- UE supports half-res with mip-level selection based on sample count and DMFP
 
 Primary bucket:
 
 - missing feature
 
-### J. TAA-aware Burley quality parity is deferred
+### L. TAA-aware Burley quality parity is deferred
 
 Current Filament state:
 
 - the blur is applied before TAA
 - baseline comparison workflow disables TAA for deterministic captures
+- UE has temporal variance tracking and history-based quality adaptation
 
 Primary bucket:
 
