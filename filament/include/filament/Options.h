@@ -775,13 +775,7 @@ struct StereoscopicOptions {
 
 enum class SubsurfaceScatteringDebugMode : uint8_t {
     NONE,
-    MEMBERSHIP,
-    INFLUENCE,
-    PRE_BLUR_DIFFUSE,
-    POST_BLUR_DIFFUSE,
-    TERMINATOR_WINDOW,
-    BAND_MASK,
-    TRANSMISSION
+    SCATTERING
 };
 
 /**
@@ -850,6 +844,32 @@ struct SubsurfaceScatteringOptions {
      * Per-channel tint applied to the transmission contribution.
      */
     math::float3 transmissionTintColor = { 1.0f, 1.0f, 1.0f };
+
+    /**
+     * When enabled, the blur sample count scales with screen-space radius.
+     * Distant or small-radius SSS uses fewer samples for better performance.
+     */
+    bool adaptiveSampleCount = false;
+
+    /**
+     * Minimum sample count when adaptive sampling is enabled (range: 3-25).
+     */
+    uint8_t minSampleCount = 5;
+
+    /**
+     * Tint applied to blur taps that cross SSS material boundaries.
+     * When two adjacent pixels have different subsurface parameters, this tint
+     * modulates the sample contribution to prevent cross-profile color leaking.
+     * Default white {1,1,1} means no boundary suppression.
+     */
+    math::float3 boundaryColorBleed = { 1.0f, 1.0f, 1.0f };
+
+    /**
+     * Calibration factor for transmission mean free path scaling.
+     * Matches Unreal Engine's empirical correction for Burley transmission.
+     * Values must be greater than 0.
+     */
+    float transmissionMFPScaleFactor = 100.0f;
 
     /**
      * Optional debug visualization for the SSS setup / blur pass.

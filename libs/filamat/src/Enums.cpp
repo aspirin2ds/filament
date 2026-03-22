@@ -54,7 +54,8 @@ std::unordered_map<std::string_view, Property> Enums::mStringToProperty = {
         { "specularFactor",      Property::SPECULAR_FACTOR },
         { "specularColorFactor", Property::SPECULAR_COLOR_FACTOR },
         { "shadowStrength",      Property::SHADOW_STRENGTH },
-        { "scatteringDistance",  Property::SCATTERING_DISTANCE }
+        { "scatteringDistance",  Property::SCATTERING_DISTANCE },
+        { "radiusScale",         Property::RADIUS_SCALE }
 };
 
 template <>

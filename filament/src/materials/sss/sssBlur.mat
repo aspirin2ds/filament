@@ -1,113 +1,32 @@
 material {
     name : sssBlur,
     parameters : [
-        {
-            type : sampler2d,
-            name : color,
-            precision: medium
-        },
-        {
-            type : sampler2d,
-            name : depth,
-            precision: high
-        },
-        {
-            type : sampler2d,
-            name : diffuse,
-            precision: medium
-        },
-        {
-            type : sampler2d,
-            name : normal,
-            precision: high
-        },
-        {
-            type : sampler2d,
-            name : params,
-            precision: medium
-        },
-        {
-            type : sampler2d,
-            name : albedo,
-            precision: medium
-        },
-        {
-            type : sampler2d,
-            name : setupDiffuse,
-            precision: medium
-        },
-        {
-            type : float2,
-            name : axis,
-            precision: high
-        },
-        {
-            type : float4,
-            name : resolution,
-            precision: high
-        },
-        {
-            type : float,
-            name : scatteringDistance,
-            precision: high
-        },
-        {
-            type : float3,
-            name : subsurfaceColor,
-            precision: medium
-        },
-        {
-            type : float,
-            name : worldUnitScale,
-            precision: high
-        },
-        {
-            type : float,
-            name : ior,
-            precision: high
-        },
-        {
-            type : float,
-            name : extinctionScale,
-            precision: high
-        },
-        {
-            type : float,
-            name : normalScale,
-            precision: high
-        },
-        {
-            type : float,
-            name : scatteringDistribution,
-            precision: high
-        },
-        {
-            type : float3,
-            name : transmissionTintColor,
-            precision: medium
-        },
-        {
-            type : float,
-            name : cameraFar,
-            precision: high
-        },
-        {
-            type : int,
-            name : sampleCount
-        },
-        {
-            type : float,
-            name : projectedScale,
-            precision: high
-        },
-        {
-            type : int,
-            name : debugMode
-        },
-        {
-            type : int,
-            name : passIndex
-        }
+        { type : sampler2d, name : color, precision: medium },
+        { type : sampler2d, name : depth, precision: high },
+        { type : sampler2d, name : diffuse, precision: medium },
+        { type : sampler2d, name : normal, precision: high },
+        { type : sampler2d, name : params, precision: medium },
+        { type : sampler2d, name : albedo, precision: medium },
+        { type : sampler2d, name : setupDiffuse, precision: medium },
+        { type : float2, name : axis, precision: high },
+        { type : float4, name : resolution, precision: high },
+        { type : float, name : scatteringDistance, precision: high },
+        { type : float3, name : subsurfaceColor, precision: medium },
+        { type : float, name : worldUnitScale, precision: high },
+        { type : float, name : ior, precision: high },
+        { type : float, name : extinctionScale, precision: high },
+        { type : float, name : normalScale, precision: high },
+        { type : float, name : scatteringDistribution, precision: high },
+        { type : float3, name : transmissionTintColor, precision: medium },
+        { type : float, name : transmissionMFPScaleFactor, precision: high },
+        { type : float3, name : boundaryColorBleed, precision: medium },
+        { type : float, name : cameraFar, precision: high },
+        { type : int, name : sampleCount },
+        { type : float, name : projectedScale, precision: high },
+        { type : int, name : adaptiveSamples },
+        { type : int, name : minSampleCount },
+        { type : int, name : debugMode },
+        { type : int, name : passIndex }
     ],
     variables : [
         vertex
@@ -124,24 +43,40 @@ vertex {
 }
 
 fragment {
-    /**
-     * Burley Normalized Diffusion profile (scalar):
-     *   R(r) = s / (8 * pi * r) * (exp(-s * r) + exp(-s * r / 3))
-     * where s = 1.0 / scatteringDistance
-     */
-    float burleyProfile(float r, float s) {
-        return (s / (8.0 * PI)) * (exp(-s * r) + exp(-s * r / 3.0)) / max(r, 0.0001);
-    }
-
+    // Per-channel Burley Normalized Diffusion profile:
+    //   R(r) = s / (8*pi*r) * (exp(-s*r) + exp(-s*r/3)),  s = 1/d
     vec3 burleyProfile3(float r, vec3 d) {
         vec3 safeD = max(d, vec3(0.0001));
         vec3 s = 1.0 / safeD;
         return (s / (8.0 * PI)) * (exp(-s * r) + exp(-s * r / 3.0)) / max(r, 0.0001);
     }
 
-    vec3 getCDF3D(vec3 d, float x) {
-        vec3 safeD = max(d, vec3(0.0001));
-        return vec3(1.0) - 0.25 * exp(-x / safeD) - 0.75 * exp(-x / (3.0 * safeD));
+    // Burley CDF: probability that a sample falls within radius r.
+    //   CDF(r) = 1 - 0.25*exp(-r/d) - 0.75*exp(-r/(3d))
+    float burleyCdf(float r, float d) {
+        float safeD = max(d, 0.0001);
+        return 1.0 - 0.25 * exp(-r / safeD) - 0.75 * exp(-r / (3.0 * safeD));
+    }
+
+    // Analytic inverse of Burley CDF (from UE RadiusRootFindAnalytic).
+    // Given a uniform random value xi in [0,1], returns the radius r such that CDF(r) = xi.
+    //   U = 1 - xi
+    //   G = 1 + 4*U*(2*U + sqrt(1 + 4*U*U))
+    //   r = d * 3 * ln((1 + G^(-1/3) + G^(1/3)) / (4*U))
+    float burleyCdfInverse(float xi, float d) {
+        float u = max(1.0 - xi, 1e-6);
+        float g = 1.0 + 4.0 * u * (2.0 * u + sqrt(1.0 + 4.0 * u * u));
+        float inv3 = 1.0 / 3.0;
+        float gInv3 = pow(g, -inv3);
+        float g3 = pow(g, inv3);
+        return max(d, 0.0001) * 3.0 * log(max((1.0 + gInv3 + g3) / (4.0 * u), 1e-6));
+    }
+
+    // Burley CDF derivative (= PDF of the radial distribution).
+    //   pdf(r) = 0.25/d * (exp(-r/d) + exp(-r/(3d)))
+    float burleyPdf(float r, float d) {
+        float safeD = max(d, 0.0001);
+        return 0.25 / safeD * (exp(-r / safeD) + exp(-r / (3.0 * safeD)));
     }
 
     vec3 getSearchLightDiffuseScalingFactor3D(vec3 surfaceAlbedo) {
@@ -159,53 +94,10 @@ fragment {
                 getSearchLightDiffuseScalingFactor3D(surfaceAlbedo) * dmfp;
     }
 
-    float dominantDistanceChannel(vec3 values, vec3 distances) {
-        if (distances.r >= distances.g && distances.r >= distances.b) {
-            return values.r;
-        }
-        return distances.g >= distances.b ? values.g : values.b;
-    }
-
-    /**
-     * Bilateral depth weight: suppress contributions from pixels at different depths
-     * to prevent light leaking across depth discontinuities.
-     */
-    float depthWeight(highp float centerDepth, highp float sampleDepth, float threshold) {
-        float diff = abs(sampleDepth - centerDepth) / threshold;
-        return max(0.0, 1.0 - diff * diff);
-    }
-
-    /**
-     * Linearize depth from the depth buffer.
-     */
     highp float linearizeDepth(highp float depth) {
         const highp float preventDiv0 = 1.0 / 16777216.0;
         highp mat4 p = getViewFromClipMatrix();
         return (depth * p[2].z + p[3].z) / max(depth * p[2].w + p[3].w, preventDiv0);
-    }
-
-    highp vec3 reconstructViewPosition(highp vec2 uv, highp float depth) {
-        highp vec4 clip = vec4(uv * 2.0 - 1.0, depth, 1.0);
-        highp vec4 view = getViewFromClipMatrix() * clip;
-        return view.xyz / max(view.w, 1e-6);
-    }
-
-    highp vec3 estimateGeometricNormalFromDepth(highp vec2 uv, highp vec4 res) {
-        highp vec2 texel = res.zw;
-        highp vec2 uvX = clamp(uv + vec2(texel.x, 0.0), texel * 0.5, vec2(1.0) - texel * 0.5);
-        highp vec2 uvY = clamp(uv + vec2(0.0, texel.y), texel * 0.5, vec2(1.0) - texel * 0.5);
-
-        highp float depthC = textureLod(materialParams_depth, uv, 0.0).r;
-        highp float depthX = textureLod(materialParams_depth, uvX, 0.0).r;
-        highp float depthY = textureLod(materialParams_depth, uvY, 0.0).r;
-
-        highp vec3 pC = reconstructViewPosition(uv, depthC);
-        highp vec3 pX = reconstructViewPosition(uvX, depthX);
-        highp vec3 pY = reconstructViewPosition(uvY, depthY);
-
-        highp vec3 dx = pX - pC;
-        highp vec3 dy = pY - pC;
-        return normalize(cross(dx, dy));
     }
 
     highp vec4 sampleStoredNormalData(highp vec2 uv) {
@@ -243,17 +135,16 @@ fragment {
         vec4 centerBlurData = textureLod(materialParams_diffuse, uv, 0.0);
         vec4 centerSetupData = textureLod(materialParams_setupDiffuse, uv, 0.0);
         vec4 centerParamsData = textureLod(materialParams_params, uv, 0.0);
-        vec3 centerAlbedo = sampleSurfaceAlbedo(uv);
+        vec3 centerAlbedo = max(textureLod(materialParams_albedo, uv, 0.0).rgb, vec3(1e-3));
         highp float centerDepth = -linearizeDepth(textureLod(materialParams_depth, uv, 0.0).r);
         float centerMask = centerSetupData.a;
 
-        // If depth is very far (sky) or invalid, skip SSS
+        // Skip non-SSS pixels
         if (centerDepth > materialParams.cameraFar * 0.99 || centerDepth < 0.001 || centerMask < 0.001) {
             if (!recombinePass) {
                 postProcess.color = centerSetupData;
             } else {
-                postProcess.color = materialParams.debugMode != 0 ?
-                        vec4(0.0, 0.0, 0.0, 1.0) : centerColor;
+                postProcess.color = centerColor;
             }
             return;
         }
@@ -262,11 +153,7 @@ fragment {
         vec3 centerDiffuse = recombinePass ? centerBlurData.rgb : centerSetupLighting;
         vec3 centerSetupDiffuse = centerSetupData.rgb;
         vec3 centerSpecular = max(centerColor.rgb - centerSetupDiffuse, vec3(0.0));
-        highp vec4 centerNormalData = sampleStoredNormalData(uv);
-        highp vec3 centerNormal = normalize(centerNormalData.xyz);
         highp vec3 centerMacroNormal = estimateSmoothedStoredNormal(uv, res, 1.0);
-        highp vec3 centerGeometricNormal = estimateGeometricNormalFromDepth(uv, res);
-        float centerThickness = saturate(centerNormalData.a);
         vec3 centerTint = saturate(centerParamsData.rgb * materialParams.subsurfaceColor);
         float sd = max(centerParamsData.a * materialParams.scatteringDistance, 0.001);
         float scaledSd = sd * materialParams.worldUnitScale;
@@ -274,44 +161,52 @@ fragment {
         vec3 centerD = centerDmfp / getSearchLightDiffuseScalingFactor3D(centerAlbedo);
         vec3 centerMfp = max(getMfpFromDmfpApprox(centerAlbedo, centerDmfp), vec3(0.001));
         float supportRadius = max(centerMfp.r, max(centerMfp.g, centerMfp.b));
-        float dominantDmfp = dominantDistanceChannel(centerDmfp, centerDmfp);
-        float dominantAlbedo = dominantDistanceChannel(centerAlbedo, centerDmfp);
-        float dominantD = dominantDmfp / max(
-                getSearchLightDiffuseScalingFactor3D(vec3(dominantAlbedo)).r, 1e-4);
 
-        // Use the per-pixel scattering radius and keep view options as a global multiplier.
+        // Dominant D for sample placement (use channel with largest scatter distance).
+        float dominantD = max(centerD.r, max(centerD.g, centerD.b));
+
         float pixelScale = materialParams.projectedScale / centerDepth;
-        float effectiveRadiusPixels = max(supportRadius * pixelScale, 1.0);
-        float centerSampleRadius = 1.0 / max(pixelScale, 1e-4);
-        float centerSampleCdf = saturate(getCDF3D(vec3(max(dominantD, 1e-4)),
-                centerSampleRadius).r);
 
-        float depthThreshold = supportRadius * 2.0;
-
-        // Accumulate diffuse-only blur in lighting space with a per-channel Burley distance.
+        // Blur loop with CDF-based importance sampling.
+        // Samples are placed at radii determined by inverting the Burley CDF,
+        // concentrating samples where the profile has the most energy.
+        // Each sample is weighted by profile(r) / pdf(r) for unbiased estimation.
+        // No radius clamp — IS weights naturally handle far samples.
         vec3 totalDiffuse = centerDiffuse;
         vec3 totalWeight = vec3(1.0);
-
         int halfSamples = materialParams.sampleCount / 2;
 
         for (int i = 1; i <= halfSamples; i++) {
-            float fi = float(i);
-            float t = fi / float(halfSamples);
-            float samplePixels = effectiveRadiusPixels * t * t;
+            // CDF-based sample placement: uniform xi in (0, 1) → radius via CDF inverse.
+            float xi = float(i) / float(halfSamples + 1);
+            float worldDist = burleyCdfInverse(xi, dominantD);
+            float samplePixels = worldDist * pixelScale;
+
             vec2 offset = materialParams.axis * res.zw * samplePixels;
 
-            float worldDist = samplePixels / pixelScale;
-            vec3 kernelWeight = burleyProfile3(worldDist, centerD);
+            // Per-channel profile weight divided by scalar PDF for importance sampling.
+            // weight_i = R(r, D_channel) / pdf(r, D_dominant)
+            float pdf = max(burleyPdf(worldDist, dominantD), 1e-5);
+            vec3 kernelWeight = burleyProfile3(worldDist, centerD) / pdf;
+
+            // Soft depth threshold for edge rejection. On smooth curved surfaces
+            // the depth change is gradual and should NOT suppress scattering.
+            // Only reject at hard depth discontinuities (object edges).
+            float depthFalloff = supportRadius * 3.0;
 
             // Positive direction
             vec2 uvP = uv + offset;
             vec4 diffuseDataP = textureLod(materialParams_diffuse, uvP, 0.0);
             highp float depthP = -linearizeDepth(textureLod(materialParams_depth, uvP, 0.0).r);
-            float bilateralP = depthWeight(centerDepth, depthP, depthThreshold);
             float maskP = diffuseDataP.a;
             highp vec3 normalP = estimateSmoothedStoredNormal(uvP, res, 1.0);
-            float filterP = bilateralP * normalWeight(centerMacroNormal, normalP) * maskP;
+
+            // Soft bilateral: depth weight rejects hard edges, allows smooth curvature.
+            float deltaDepthP = abs(depthP - centerDepth);
+            float depthWeightP = saturate(1.0 - deltaDepthP / depthFalloff);
+            float filterP = normalWeight(centerMacroNormal, normalP) * maskP * depthWeightP;
             vec3 wP = kernelWeight * filterP;
+
             vec3 diffuseP = diffuseDataP.rgb;
             if (!recombinePass) {
                 diffuseP /= sampleSurfaceAlbedo(uvP);
@@ -323,11 +218,14 @@ fragment {
             vec2 uvN = uv - offset;
             vec4 diffuseDataN = textureLod(materialParams_diffuse, uvN, 0.0);
             highp float depthN = -linearizeDepth(textureLod(materialParams_depth, uvN, 0.0).r);
-            float bilateralN = depthWeight(centerDepth, depthN, depthThreshold);
             float maskN = diffuseDataN.a;
             highp vec3 normalN = estimateSmoothedStoredNormal(uvN, res, 1.0);
-            float filterN = bilateralN * normalWeight(centerMacroNormal, normalN) * maskN;
+
+            float deltaDepthN = abs(depthN - centerDepth);
+            float depthWeightN = saturate(1.0 - deltaDepthN / depthFalloff);
+            float filterN = normalWeight(centerMacroNormal, normalN) * maskN * depthWeightN;
             vec3 wN = kernelWeight * filterN;
+
             vec3 diffuseN = diffuseDataN.rgb;
             if (!recombinePass) {
                 diffuseN /= sampleSurfaceAlbedo(uvN);
@@ -337,118 +235,22 @@ fragment {
         }
 
         vec3 blurredDiffuse = totalDiffuse / max(totalWeight, vec3(1e-4));
+
+        // Pass 1 (H-blur): output blurred diffuse in lighting space
         if (!recombinePass) {
             postProcess.color = vec4(blurredDiffuse, centerMask);
             return;
         }
 
-        highp vec3 lightDirView = normalize(
-                (getViewFromWorldMatrix() * vec4(frameUniforms.lightDirection, 0.0)).xyz);
-        highp vec3 centerViewPos = reconstructViewPosition(
-                uv, textureLod(materialParams_depth, uv, 0.0).r);
-        highp vec3 viewDir = normalize(-centerViewPos);
-        float NoV = saturate(abs(dot(centerMacroNormal, viewDir)));
-        float rawNoL = dot(centerMacroNormal, lightDirView);
-        float edgeAttenuation = smoothstep(0.04, 0.30, NoV);
-
+        // Pass 2 (V-blur + recombine):
+        // debugMode 1 = scattering only (blurred diffuse, no specular)
         if (materialParams.debugMode == 1) {
-            postProcess.color = vec4(vec3(centerMask), 1.0);
-            return;
-        }
-
-        float scatterAmount = smoothstep(0.005, 0.20, supportRadius) * centerMask;
-        float faceBoost = smoothstep(0.22, 0.88, NoV);
-        vec3 lowFrequencyDiffuse = blurredDiffuse;
-        vec3 highFrequencyResidual = max(centerSetupLighting - blurredDiffuse, vec3(0.0));
-
-        // Keep the final diffuse footprint close to the post-blur result, with only a small
-        // amount of local detail preserved from the original diffuse.
-        vec3 softenedResidual = highFrequencyResidual * mix(0.05, 0.14, faceBoost);
-        vec3 baseScatterDiffuse = max(lowFrequencyDiffuse + softenedResidual, vec3(0.0));
-        vec3 baseScatterDelta = baseScatterDiffuse - centerSetupLighting;
-        float baseDeltaMagnitude = luminance(abs(baseScatterDelta));
-
-        float terminatorAnchor = 1.0 - smoothstep(0.0, mix(0.32, 0.50, NoV), abs(rawNoL));
-        float shadowSupport = 1.0 - smoothstep(-0.12, 0.20, rawNoL);
-        float litFalloff = 1.0 - smoothstep(0.04, mix(0.14, 0.24, NoV), rawNoL);
-        float silhouetteSuppression = smoothstep(0.02, 0.18, NoV);
-        float terminatorWindow = saturate(terminatorAnchor * litFalloff * silhouetteSuppression);
-        float bandPresence = saturate(scatterAmount * (1.0 - centerSampleCdf) *
-                silhouetteSuppression * max(terminatorAnchor, shadowSupport));
-
-        float detailGate = smoothstep(0.0003, 0.008, baseDeltaMagnitude);
-        float lerpFactor = saturate(scatterAmount * (1.0 - centerSampleCdf) * detailGate);
-        lerpFactor *= mix(0.85, 1.10, faceBoost);
-        lerpFactor *= mix(0.75, 1.0, silhouetteSuppression);
-        vec3 fadedTint = saturate(centerTint * lerpFactor);
-        vec3 finalScatterLighting = mix(centerSetupLighting, blurredDiffuse, fadedTint);
-
-        float influenceMask = max3(fadedTint);
-
-        if (materialParams.debugMode == 2) {
-            vec3 debugColor = vec3(1.0, 0.35, 0.08) * influenceMask;
-            debugColor += max((finalScatterLighting - baseScatterDiffuse) * 3.0, vec3(0.0));
-            postProcess.color = vec4(debugColor, 1.0);
-            return;
-        }
-
-        if (materialParams.debugMode == 3) {
-            postProcess.color = vec4(centerSetupLighting * centerAlbedo, 1.0);
-            return;
-        }
-
-        if (materialParams.debugMode == 4) {
             postProcess.color = vec4(blurredDiffuse * centerAlbedo, 1.0);
             return;
         }
 
-        if (materialParams.debugMode == 5) {
-            postProcess.color = vec4(vec3(terminatorWindow), 1.0);
-            return;
-        }
-
-        if (materialParams.debugMode == 6) {
-            postProcess.color = vec4(vec3(influenceMask), 1.0);
-            return;
-        }
-
-        // Thin-region transmission is a distinct backlit contribution layered on top of the
-        // laterally scattered diffuse.
-        float silhouette = pow(1.0 - NoV, 3.5);
-        // Keep the light-facing center mostly geometric and let normalScale add detail rather than
-        // steering the whole lobe.
-        float macroTransmissionNoL = dot(centerGeometricNormal, lightDirView);
-        float detailTransmissionNoL = dot(centerNormal, lightDirView);
-        float transmissionBlend = 0.35 * sqrt(materialParams.normalScale);
-        float transmissionNoL = mix(macroTransmissionNoL, detailTransmissionNoL, transmissionBlend);
-        float distribution = materialParams.scatteringDistribution * 2.0 - 1.0;
-        float phase01 = saturate(distribution * 0.5 + 0.5);
-        float phaseBias = mix(0.10, -0.08, phase01);
-        float phaseScale = mix(1.35, 2.25, phase01);
-        float backlight = saturate((-transmissionNoL + phaseBias) * phaseScale);
-        backlight *= backlight;
-        float thinRegion = 1.0 - centerThickness;
-        float transmissionStrength = backlight * silhouette * thinRegion * centerMask;
-        transmissionStrength *= smoothstep(0.03, 0.20, supportRadius);
-        transmissionStrength *= 0.35 + 0.65 * (1.0 - edgeAttenuation);
-        float oneOverIor = 1.0 / max(materialParams.ior, 1.0);
-        transmissionStrength *= saturate(1.15 - oneOverIor);
-        float opticalPath = mix(0.10, 1.25, centerThickness) * max(supportRadius, 0.001);
-        float transmissionAttenuation = exp(-materialParams.extinctionScale * opticalPath);
-        transmissionStrength *= transmissionAttenuation;
-        vec3 transmissionTint = centerTint * materialParams.transmissionTintColor;
-        vec3 transmission = transmissionTint * transmissionStrength * 0.45;
-
-        if (materialParams.debugMode == 7) {
-            // Use a debug-only exposure/tonemap so the isolated transmission term remains readable
-            // even when the physically plausible contribution is very small.
-            vec3 transmissionDebug = transmission * 8.0;
-            transmissionDebug = transmissionDebug / (vec3(1.0) + transmissionDebug);
-            postProcess.color = vec4(transmissionDebug, 1.0);
-            return;
-        }
-
-        vec3 finalDiffuse = finalScatterLighting * centerAlbedo + transmission;
+        // Final: blurred diffuse * albedo + specular
+        vec3 finalDiffuse = blurredDiffuse * centerAlbedo;
         postProcess.color = vec4(finalDiffuse + centerSpecular, centerColor.a);
     }
 }

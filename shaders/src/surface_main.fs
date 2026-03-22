@@ -67,7 +67,14 @@ void main() {
 
     fragColor = evaluateMaterial(inputs);
 
+#if defined(MATERIAL_HAS_POST_LIGHTING_COLOR) && !defined(MATERIAL_HAS_REFLECTIONS)
+    blendPostLightingColor(inputs, fragColor);
+#endif
+
 #if defined(SHADING_MODEL_SUBSURFACE_BURLEY)
+    // Write SSS MRTs after post-lighting blend so that the specular extraction
+    // (fragColor - g_sssDiffuse) in the blur pass captures any post-lighting delta
+    // consistently. Post-lighting effects are treated as non-scattering.
     highp vec3 shadingViewNormal = normalize(
             (getViewFromWorldMatrix() * vec4(shading_normal, 0.0)).xyz);
     vec3 surfaceAlbedo = max(inputs.baseColor.rgb, vec3(1e-3));
@@ -75,17 +82,13 @@ void main() {
     gl_FragData[1] = vec4(g_sssDiffuse, saturate(g_sssMask));
     gl_FragData[2] = vec4(shadingViewNormal, saturate(inputs.thickness));
     gl_FragData[3] = vec4(saturate(inputs.subsurfaceColor), max(inputs.scatteringDistance, 0.0));
-    gl_FragData[4] = vec4(surfaceAlbedo, 1.0);
+    gl_FragData[4] = vec4(surfaceAlbedo, saturate(inputs.radiusScale));
 #else
     fragColor1 = vec4(g_sssDiffuse, saturate(g_sssMask));
     fragColor2 = vec4(shadingViewNormal, saturate(inputs.thickness));
     fragColor3 = vec4(saturate(inputs.subsurfaceColor), max(inputs.scatteringDistance, 0.0));
-    fragColor4 = vec4(surfaceAlbedo, 1.0);
+    fragColor4 = vec4(surfaceAlbedo, saturate(inputs.radiusScale));
 #endif
-#endif
-
-#if defined(MATERIAL_HAS_POST_LIGHTING_COLOR) && !defined(MATERIAL_HAS_REFLECTIONS)
-    blendPostLightingColor(inputs, fragColor);
 #endif
 
 #if defined(VARIANT_HAS_FOG)

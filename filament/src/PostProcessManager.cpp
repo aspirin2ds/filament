@@ -1245,7 +1245,11 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::subsurfaceScatteringBlur(Fra
     float const normalScale = options.normalScale;
     float const scatteringDistribution = options.scatteringDistribution;
     math::float3 const transmissionTintColor = options.transmissionTintColor;
+    float const transmissionMFPScaleFactor = options.transmissionMFPScaleFactor;
+    math::float3 const boundaryColorBleed = options.boundaryColorBleed;
     int32_t const sampleCount = int32_t(options.sampleCount);
+    int32_t const adaptiveSamples = options.adaptiveSampleCount ? 1 : 0;
+    int32_t const minSampleCount = int32_t(options.minSampleCount);
     int32_t const debugMode = int32_t(options.debugMode);
 
     // Horizontal pass
@@ -1351,7 +1355,11 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::subsurfaceScatteringBlur(Fra
                     mi->setParameter("normalScale", normalScale);
                     mi->setParameter("scatteringDistribution", scatteringDistribution);
                     mi->setParameter("transmissionTintColor", transmissionTintColor);
+                    mi->setParameter("transmissionMFPScaleFactor", transmissionMFPScaleFactor);
+                    mi->setParameter("boundaryColorBleed", boundaryColorBleed);
                     mi->setParameter("sampleCount", sampleCount);
+                    mi->setParameter("adaptiveSamples", adaptiveSamples);
+                    mi->setParameter("minSampleCount", minSampleCount);
                     mi->setParameter("projectedScale", projectedScale);
                     mi->setParameter("cameraFar", cameraFar);
                     mi->setParameter("debugMode", passDebugMode);

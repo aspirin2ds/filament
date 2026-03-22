@@ -1267,6 +1267,7 @@ char const* CodeGenerator::getConstantName(MaterialBuilder::Property property) n
         case Property::SPECULAR_COLOR_FACTOR:       return "SPECULAR_COLOR_FACTOR";
         case Property::SHADOW_STRENGTH:             return "SHADOW_STRENGTH";
         case Property::SCATTERING_DISTANCE:         return "SCATTERING_DISTANCE";
+        case Property::RADIUS_SCALE:                return "RADIUS_SCALE";
     }
 }
 

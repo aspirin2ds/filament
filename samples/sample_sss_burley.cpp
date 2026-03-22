@@ -81,25 +81,13 @@ constexpr float PI_F = 3.14159265358979323846f;
 
 enum class DebugView : int {
     FINAL = 0,
-    SSS_MEMBERSHIP,
-    SSS_INFLUENCE,
-    PRE_BLUR_DIFFUSE,
-    POST_BLUR_DIFFUSE,
-    TERMINATOR_WINDOW,
-    BAND_MASK,
-    TRANSMISSION,
+    SCATTERING,
     COUNT
 };
 
 constexpr std::array<const char*, size_t(DebugView::COUNT)> DEBUG_VIEW_NAMES = {{
     "Final",
-    "SSS Membership",
-    "SSS Influence",
-    "Pre-Blur Diffuse",
-    "Post-Blur Diffuse",
-    "Terminator Window",
-    "Band Mask",
-    "Transmission View"
+    "Scattering Only"
 }};
 
 struct BurleyPreset {
@@ -238,15 +226,9 @@ struct ComparisonArtifact {
     const char* slug;
 };
 
-constexpr std::array<ComparisonArtifact, 8> COMPARISON_ARTIFACTS = {{
+constexpr std::array<ComparisonArtifact, 2> COMPARISON_ARTIFACTS = {{
     { DebugView::FINAL, "Final", "final" },
-    { DebugView::SSS_INFLUENCE, "SSS Influence", "sss_influence" },
-    { DebugView::SSS_MEMBERSHIP, "SSS Membership", "sss_membership" },
-    { DebugView::PRE_BLUR_DIFFUSE, "Pre-Blur Diffuse", "pre_blur_diffuse" },
-    { DebugView::POST_BLUR_DIFFUSE, "Post-Blur Diffuse", "post_blur_diffuse" },
-    { DebugView::TERMINATOR_WINDOW, "Terminator Window", "terminator_window" },
-    { DebugView::BAND_MASK, "Band Mask", "band_mask" },
-    { DebugView::TRANSMISSION, "Transmission View", "transmission" }
+    { DebugView::SCATTERING, "Scattering Only", "scattering" }
 }};
 
 struct GapRow {
@@ -426,9 +408,12 @@ struct App {
     float roughness1 = 1.3f;
     float lobeMix = 0.85f;
     float3 transmissionTintColor = { 1.0f, 1.0f, 1.0f };
+    float transmissionMFPScaleFactor = 100.0f;
 
     bool sssEnabled = true;
     int sssSampleCount = 11;
+    bool adaptiveSampleCount = false;
+    int minSampleCount = 5;
     DebugView debugView = DebugView::FINAL;
 
     bool screenshotRequested = false;
@@ -538,20 +523,8 @@ Texture* loadNormalMap(Engine* engine, const uint8_t* normals, size_t nbytes) {
 
 SubsurfaceScatteringDebugMode toSssDebugMode(DebugView view) {
     switch (view) {
-        case DebugView::SSS_MEMBERSHIP:
-            return SubsurfaceScatteringDebugMode::MEMBERSHIP;
-        case DebugView::SSS_INFLUENCE:
-            return SubsurfaceScatteringDebugMode::INFLUENCE;
-        case DebugView::PRE_BLUR_DIFFUSE:
-            return SubsurfaceScatteringDebugMode::PRE_BLUR_DIFFUSE;
-        case DebugView::POST_BLUR_DIFFUSE:
-            return SubsurfaceScatteringDebugMode::POST_BLUR_DIFFUSE;
-        case DebugView::TERMINATOR_WINDOW:
-            return SubsurfaceScatteringDebugMode::TERMINATOR_WINDOW;
-        case DebugView::BAND_MASK:
-            return SubsurfaceScatteringDebugMode::BAND_MASK;
-        case DebugView::TRANSMISSION:
-            return SubsurfaceScatteringDebugMode::TRANSMISSION;
+        case DebugView::SCATTERING:
+            return SubsurfaceScatteringDebugMode::SCATTERING;
         default:
             return SubsurfaceScatteringDebugMode::NONE;
     }
@@ -623,7 +596,8 @@ void writeComparisonMetadata(App const& app, View const* view) {
     out << "  \"roughness1\": " << app.roughness1 << ",\n";
     out << "  \"lobeMix\": " << app.lobeMix << ",\n";
     out << "  \"transmissionTintColor\": " << vectorToJson(app.transmissionTintColor) << ",\n";
-    out << "  \"thinRegionTransmission\": true\n";
+    out << "  \"transmissionMFPScaleFactor\": " << app.transmissionMFPScaleFactor << ",\n";
+    out << "  \"burleyTransmissionProfile\": true\n";
     out << "}\n";
 }
 
@@ -708,6 +682,8 @@ void applyViewOptions(App& app) {
     SubsurfaceScatteringOptions sssOptions;
     sssOptions.enabled = app.sssEnabled;
     sssOptions.sampleCount = uint8_t(app.sssSampleCount);
+    sssOptions.adaptiveSampleCount = app.adaptiveSampleCount;
+    sssOptions.minSampleCount = uint8_t(app.minSampleCount);
     sssOptions.scatteringDistance = 1.0f;
     sssOptions.subsurfaceColor = float3{ 1.0f, 1.0f, 1.0f };
     sssOptions.worldUnitScale = app.worldUnitScale;
@@ -716,6 +692,8 @@ void applyViewOptions(App& app) {
     sssOptions.normalScale = app.normalScale;
     sssOptions.scatteringDistribution = app.scatteringDistribution;
     sssOptions.transmissionTintColor = app.transmissionTintColor;
+    sssOptions.transmissionMFPScaleFactor = app.transmissionMFPScaleFactor;
+    sssOptions.boundaryColorBleed = app.boundaryColorBleed;
     sssOptions.debugMode = toSssDebugMode(app.debugView);
     app.mainView->setSubsurfaceScatteringOptions(sssOptions);
 }
@@ -983,6 +961,8 @@ int main(int argc, char** argv) {
             ImGui::SliderFloat("Transmission Scattering Distribution##Transmission",
                     &app.scatteringDistribution, 0.0f, 1.0f);
             ImGui::ColorEdit3("Transmission Tint##Transmission", &app.transmissionTintColor.x);
+            ImGui::SliderFloat("Transmission MFP Scale##Transmission",
+                    &app.transmissionMFPScaleFactor, 0.1f, 500.0f, "%.1f");
         }
 
         if (ImGui::CollapsingHeader("Dual Specular")) {
@@ -991,11 +971,22 @@ int main(int argc, char** argv) {
             ImGui::SliderFloat("Dual Spec Lobe Mix##DualSpec", &app.lobeMix, 0.0f, 1.0f);
         }
 
+        if (ImGui::CollapsingHeader("Boundary")) {
+            ImGui::ColorEdit3("Boundary Color Bleed", &app.boundaryColorBleed.x);
+        }
+
         if (ImGui::CollapsingHeader("SSS Blur Pass", ImGuiTreeNodeFlags_DefaultOpen)) {
             ImGui::Checkbox("Enable SSS Blur", &app.sssEnabled);
             ImGui::SliderInt("Sample Count", &app.sssSampleCount, 3, 25);
             if ((app.sssSampleCount & 1) == 0) {
                 app.sssSampleCount++;
+            }
+            ImGui::Checkbox("Adaptive Sample Count", &app.adaptiveSampleCount);
+            if (app.adaptiveSampleCount) {
+                ImGui::SliderInt("Min Samples", &app.minSampleCount, 3, 25);
+                if ((app.minSampleCount & 1) == 0) {
+                    app.minSampleCount++;
+                }
             }
         }
 

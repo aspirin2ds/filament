@@ -47,6 +47,7 @@ struct MaterialInputs {
     float roughness0;
     float roughness1;
     float lobeMix;
+    float radiusScale;
 #endif
 
 #if defined(SHADING_MODEL_CLOTH)
@@ -158,6 +159,7 @@ void initMaterial(out MaterialInputs material) {
     material.roughness0 = 0.75;
     material.roughness1 = 1.3;
     material.lobeMix = 0.85;
+    material.radiusScale = 1.0;
 #endif
 
 #if defined(SHADING_MODEL_CLOTH)
