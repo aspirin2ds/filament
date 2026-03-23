@@ -159,40 +159,38 @@ fragment {
         float scaledSd = sd * materialParams.worldUnitScale;
         vec3 centerDmfp = max(centerTint * scaledSd, vec3(0.001));
         vec3 centerD = centerDmfp / getSearchLightDiffuseScalingFactor3D(centerAlbedo);
-        vec3 centerMfp = max(getMfpFromDmfpApprox(centerAlbedo, centerDmfp), vec3(0.001));
-        float supportRadius = max(centerMfp.r, max(centerMfp.g, centerMfp.b));
-
         // Dominant D for sample placement (use channel with largest scatter distance).
         float dominantD = max(centerD.r, max(centerD.g, centerD.b));
 
         float pixelScale = materialParams.projectedScale / centerDepth;
 
-        // Blur loop with CDF-based importance sampling.
-        // Samples are placed at radii determined by inverting the Burley CDF,
-        // concentrating samples where the profile has the most energy.
-        // Each sample is weighted by profile(r) / pdf(r) for unbiased estimation.
-        // No radius clamp — IS weights naturally handle far samples.
-        vec3 totalDiffuse = centerDiffuse;
-        vec3 totalWeight = vec3(1.0);
+        // Center sample reweighting (matches UE SubsurfaceBurleyNormalized.ush:838-860).
+        // The center pixel covers a half-pixel radius along the blur axis. Its weight
+        // is the per-channel CDF at that radius — the fraction of profile energy that
+        // falls within the center pixel. Scatter samples are remapped to only cover the
+        // remaining [centerCdf, 1] range, avoiding redundant near-center samples.
+        float centerPixelRadius = 0.5 / max(pixelScale, 1e-5);
+        vec3 centerCdfWeight = vec3(
+            burleyCdf(centerPixelRadius, centerD.r),
+            burleyCdf(centerPixelRadius, centerD.g),
+            burleyCdf(centerPixelRadius, centerD.b));
+        float centerCdfScalar = burleyCdf(centerPixelRadius, dominantD);
+
+        vec3 totalDiffuse = centerDiffuse * centerCdfWeight;
+        vec3 totalWeight = centerCdfWeight;
         int halfSamples = materialParams.sampleCount / 2;
 
         for (int i = 1; i <= halfSamples; i++) {
-            // CDF-based sample placement: uniform xi in (0, 1) → radius via CDF inverse.
-            float xi = float(i) / float(halfSamples + 1);
+            // Remap xi to [centerCdf, 1] — only sample outside the center pixel.
+            float xi_raw = float(i) / float(halfSamples + 1);
+            float xi = centerCdfScalar + xi_raw * (1.0 - centerCdfScalar);
             float worldDist = burleyCdfInverse(xi, dominantD);
             float samplePixels = worldDist * pixelScale;
 
             vec2 offset = materialParams.axis * res.zw * samplePixels;
 
-            // Per-channel profile weight divided by scalar PDF for importance sampling.
-            // weight_i = R(r, D_channel) / pdf(r, D_dominant)
+            // Importance sampling PDF from the dominant (widest) channel.
             float pdf = max(burleyPdf(worldDist, dominantD), 1e-5);
-            vec3 kernelWeight = burleyProfile3(worldDist, centerD) / pdf;
-
-            // Soft depth threshold for edge rejection. On smooth curved surfaces
-            // the depth change is gradual and should NOT suppress scattering.
-            // Only reject at hard depth discontinuities (object edges).
-            float depthFalloff = supportRadius * 3.0;
 
             // Positive direction
             vec2 uvP = uv + offset;
@@ -201,11 +199,15 @@ fragment {
             float maskP = diffuseDataP.a;
             highp vec3 normalP = estimateSmoothedStoredNormal(uvP, res, 1.0);
 
-            // Soft bilateral: depth weight rejects hard edges, allows smooth curvature.
-            float deltaDepthP = abs(depthP - centerDepth);
-            float depthWeightP = saturate(1.0 - deltaDepthP / depthFalloff);
-            float filterP = normalWeight(centerMacroNormal, normalP) * maskP * depthWeightP;
-            vec3 wP = kernelWeight * filterP;
+            // 3D radius correction: fold depth delta into the scatter distance so the
+            // profile's own exponential decay handles curvature naturally (matches UE's
+            // SubsurfaceBurleyNormalized.ush:944-945). Both worldDist and depth are in
+            // world units (worldUnitScale is already baked into centerD/dominantD).
+            float deltaDepthP = depthP - centerDepth;
+            float radius3DP = sqrt(worldDist * worldDist + deltaDepthP * deltaDepthP);
+            vec3 kernelWeightP = burleyProfile3(radius3DP, centerD) / pdf;
+            float filterP = normalWeight(centerMacroNormal, normalP) * maskP;
+            vec3 wP = kernelWeightP * filterP;
 
             vec3 diffuseP = diffuseDataP.rgb;
             if (!recombinePass) {
@@ -221,10 +223,11 @@ fragment {
             float maskN = diffuseDataN.a;
             highp vec3 normalN = estimateSmoothedStoredNormal(uvN, res, 1.0);
 
-            float deltaDepthN = abs(depthN - centerDepth);
-            float depthWeightN = saturate(1.0 - deltaDepthN / depthFalloff);
-            float filterN = normalWeight(centerMacroNormal, normalN) * maskN * depthWeightN;
-            vec3 wN = kernelWeight * filterN;
+            float deltaDepthN = depthN - centerDepth;
+            float radius3DN = sqrt(worldDist * worldDist + deltaDepthN * deltaDepthN);
+            vec3 kernelWeightN = burleyProfile3(radius3DN, centerD) / pdf;
+            float filterN = normalWeight(centerMacroNormal, normalN) * maskN;
+            vec3 wN = kernelWeightN * filterN;
 
             vec3 diffuseN = diffuseDataN.rgb;
             if (!recombinePass) {
