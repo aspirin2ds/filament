@@ -67,9 +67,10 @@ Produce the comparison using the following stage-by-stage format. For each stage
 | **Scattering distance** | Per-material `scatteringDistance` (float) written to `sssParams.a`; view-global `scatteringDistance` acts as multiplier | Per-profile `MeanFreePathColor` (RGB) + `MeanFreePathDistance` (float, cm); combined into per-channel DMFP stored in profile texture |
 | **World unit scale** | View-global `worldUnitScale` (default 1.0) | Per-profile `WorldUnitScale` (default 0.1, in cm) |
 | **Tint** | View-global `subsurfaceColor` (float3); per-material `subsurfaceColor` written to `sssParams.rgb` | Per-profile `Tint` (RGBA); controls lerp between original and scattered |
-| **Boundary color bleed** | Not implemented (tracked in sample metadata only) | Per-profile `BoundaryColorBleed` (RGBA); applied during recombine to prevent color leaking at SSS boundaries |
-| **Transmission params** | View-global: `extinctionScale`, `normalScale`, `scatteringDistribution`, `ior`, `transmissionTintColor` | Per-profile: `ExtinctionScale`, `NormalScale`, `ScatteringDistribution`, `IOR`, `TransmissionTintColor` |
+| **Boundary color bleed** | Declared in `SubsurfaceScatteringOptions` and passed to shader, but **not read or applied** by `sssBlur.mat` — dead parameter | Per-profile `BoundaryColorBleed` (RGBA); applied during recombine to prevent color leaking at SSS boundaries |
+| **Transmission params** | Declared in `SubsurfaceScatteringOptions` (`extinctionScale`, `normalScale`, `scatteringDistribution`, `ior`, `transmissionTintColor`, `transmissionMFPScaleFactor`) and passed to shader, but **not read or applied** by `sssBlur.mat` — dead parameters. UI sliders exist in sample app but have no effect. | Per-profile: `ExtinctionScale`, `NormalScale`, `ScatteringDistribution`, `IOR`, `TransmissionTintColor` |
 | **Dual specular** | Per-material: `roughness0` (0.75), `roughness1` (1.3), `lobeMix` (0.85) | Per-profile: `Roughness0` (0.75), `Roughness1` (1.3), `LobeMix` (0.85) |
+| **Adaptive sampling** | Declared in `SubsurfaceScatteringOptions` (`adaptiveSampleCount`, `minSampleCount`) and passed to shader, but **not read or applied** by `sssBlur.mat` — dead parameters | Variance-based adaptive: history buffer tracks convergence; range 8-64; `r.SSS.Burley.NumSamplesOverride` for manual control |
 | **Implementation hint** | Single path (separable blur only) | Per-profile choice: `SIH_AFIS` (importance-sampled Burley) or `SIH_Separable` (separable filter) |
 | **Profile ID** | No profile ID system; all SSS pixels share blur parameters from view + per-pixel MRT values | GBuffer encodes profile ID (0-255); blur reads per-profile kernel weights from profile texture |
 | **Source files** | `Options.h`, `surface_material_inputs.fs`, `surface_main.fs` | `SubsurfaceProfile.h`, `SubsurfaceProfileCommon.ush` |
@@ -90,10 +91,10 @@ Produce the comparison using the following stage-by-stage format. For each stage
 | Aspect | Filament | Unreal Engine |
 |---|---|---|
 | **Blur topology** | Two-pass separable (horizontal then vertical) | **AFIS path:** single-pass 2D importance-sampled disk (up to 64 samples per pixel); **Separable path:** two-pass horizontal+vertical |
-| **Kernel function** | `burleyProfile3(r, D)` evaluated analytically per tap; per-channel D from albedo-scaled DMFP | **AFIS:** CDF inverse root-finding to sample radii from Burley profile; PDF weighting. **Separable:** precomputed kernel LUT from `ComputeMirroredBSSSKernel()` stored in profile texture |
-| **Sample distribution** | Uniform quadratic spacing: `t = i/halfSamples`, `samplePixels = effectiveRadius * t^2` | **AFIS:** R2 quasi-random sequence for (radius, angle) pairs; radius via `RadiusRootFindByApproximation()`. **Separable:** fixed LUT offsets |
-| **Bilateral rejection** | Depth weight: `1 - (depthDiff/threshold)^2`; Normal weight: `sqrt(dot(N_c, N_s) * 0.5 + 0.5)`; Membership mask multiplication | Depth weight (configurable); Normal weight (optional, `r.SSS.Burley.BilateralFilterKernelFunctionType`); Profile ID rejection (samples from different profiles are rejected) |
-| **Adaptive sample count** | Fixed `sampleCount` from view options (default 11) | Variance-based adaptive: history buffer tracks convergence; range 8-64; temporal accumulation with exponential weighting; `r.SSS.Burley.NumSamplesOverride` for manual control |
+| **Kernel function** | CDF-based importance sampling: `burleyCdfInverse(xi, dominantD)` places samples, `burleyProfile3(r, D) / burleyPdf(r, dominantD)` weights them. Center pixel weighted by `burleyCdf(halfPixelRadius, D)` matching UE's center reweighting. Per-channel D from albedo-scaled DMFP via `getSearchLightDiffuseScalingFactor3D()` | **AFIS:** CDF inverse root-finding to sample radii from Burley profile; PDF weighting. **Separable:** precomputed kernel LUT from `ComputeMirroredBSSSKernel()` stored in profile texture |
+| **Sample distribution** | CDF-based importance sampling: `xi` remapped to `[centerCdf, 1]` range to avoid redundant near-center samples; `burleyCdfInverse(xi, dominantD)` returns world-space radius; converted to pixel offset via `projectedScale / depth` | **AFIS:** R2 quasi-random sequence for (radius, angle) pairs; radius via `RadiusRootFindByApproximation()`. **Separable:** fixed LUT offsets |
+| **Bilateral rejection** | 3D radius correction: `sqrt(worldDist² + deltaDepth²)` folds depth difference into scatter distance (matches UE `SubsurfaceBurleyNormalized.ush:944-945`); Normal weight: `sqrt(dot(N_c, N_s) * 0.5 + 0.5)` using smoothed normals; Membership mask multiplication | Depth weight (configurable); Normal weight (optional, `r.SSS.Burley.BilateralFilterKernelFunctionType`); Profile ID rejection (samples from different profiles are rejected) |
+| **Adaptive sample count** | Fixed `sampleCount` from view options (default 11); `adaptiveSampleCount` and `minSampleCount` declared in Options.h but **not wired** in shader | Variance-based adaptive: history buffer tracks convergence; range 8-64; temporal accumulation with exponential weighting; `r.SSS.Burley.NumSamplesOverride` for manual control |
 | **Temporal integration** | None; blur applied before TAA, relies on TAA to resolve noise | Explicit temporal reprojection in Burley pass; velocity-aware history rejection; exponential blending with prior frame |
 | **Mip-level optimization** | None; always samples at LOD 0 | Adaptive mip selection based on sample radius; `MIP_CONSTANT_FACTOR` reduces aliasing for far samples; mip generation triggered by tile count threshold |
 | **Half-res path** | Not implemented | `r.SSS.HalfRes 1`: downscale, blur at half resolution, upsample+recombine; Burley can fallback to separable in half-res |
@@ -104,30 +105,28 @@ Produce the comparison using the following stage-by-stage format. For each stage
 
 | Aspect | Filament | Unreal Engine |
 |---|---|---|
-| **Specular preservation** | `centerSpecular = centerColor.rgb - centerSetupDiffuse`; added back after blur: `finalDiffuse + centerSpecular` | `ReconstructLighting()` extracts `DiffuseAndSpecular`; specular added back: `SubsurfaceLighting * StoredBaseColor + ExtractedNonSubsurface` |
-| **Tint/lerp** | Per-pixel `fadedTint` based on scatterAmount, CDF falloff, detail gate, face boost; `mix(centerSetupLighting, blurredDiffuse, fadedTint)` | `lerp(DiffuseAndSpecular.Diffuse, SSSColor, FadedTint)` where `FadedTint = Tint * LerpFactor`; LerpFactor from `ComputeFullResLerp()` in half-res mode |
-| **Base color multiply** | Implicit: albedo division/multiplication during blur; `finalScatterLighting * centerAlbedo` at output | Explicit: `SubsurfaceLighting * StoredBaseColor` at final output |
-| **Boundary color bleed** | Not applied | `GetSubsurfaceProfileBoundaryColorBleed()` per profile; prevents color bleeding at SSS/non-SSS boundaries |
-| **Terminator handling** | Custom terminator window: `terminatorAnchor * litFalloff * silhouetteSuppression`; controls scatter visibility at light/shadow boundary | No explicit terminator handling; relies on TAA and profile-level tuning |
-| **High-frequency detail** | `softenedResidual = highFrequencyResidual * mix(0.05, 0.14, faceBoost)`; preserves small amount of pre-blur detail | Not explicitly preserved; quality level controls sharpness of reconstruction |
+| **Specular preservation** | `centerSpecular = max(centerColor.rgb - centerSetupDiffuse, 0)`; added back after blur: `blurredDiffuse * centerAlbedo + centerSpecular` | `ReconstructLighting()` extracts `DiffuseAndSpecular`; specular added back: `SubsurfaceLighting * StoredBaseColor + ExtractedNonSubsurface` |
+| **Tint/lerp** | No tint/lerp step — blurred diffuse replaces original directly. Tint is baked into the per-channel D (DMFP) via `centerTint * scaledSd`, so scattering strength already varies per-channel. | `lerp(DiffuseAndSpecular.Diffuse, SSSColor, FadedTint)` where `FadedTint = Tint * LerpFactor`; LerpFactor from `ComputeFullResLerp()` in half-res mode |
+| **Base color multiply** | Albedo divided out before blur (`diffuseP /= sampleSurfaceAlbedo(uvP)` in H-pass), multiplied back at recombine (`blurredDiffuse * centerAlbedo`). This ensures the blur operates in irradiance space. | Explicit: `SubsurfaceLighting * StoredBaseColor` at final output |
+| **Boundary color bleed** | Not applied (parameter declared but dead) | `GetSubsurfaceProfileBoundaryColorBleed()` per profile; prevents color bleeding at SSS/non-SSS boundaries |
+| **Terminator handling** | Not implemented | No explicit terminator handling; relies on TAA and profile-level tuning |
+| **High-frequency detail** | Not implemented | Not explicitly preserved; quality level controls sharpness of reconstruction |
 | **Source files** | `sssBlur.mat` (recombine block, passIndex != 0) | `PostProcessSubsurface.usf` (`SubsurfaceRecombinePS`) |
 
 ### Stage 5: Transmission
 
 | Aspect | Filament | Unreal Engine |
 |---|---|---|
-| **Model** | Approximate: `silhouette * backlight * thinRegion * transmissionStrength * transmissionAttenuation`; phase function from `scatteringDistribution`; IOR-based Fresnel; extinction along optical path | Full Burley transmission profile: `0.25 * A * (exp(-S*r) + 3*exp(-S*r/3))`; per-channel MFP; uses `GetPerpendicularScalingFactor3D()` for scaling; precomputed transmission profile (32 samples) with distance fade |
-| **Thickness source** | Per-pixel from MRT normal buffer `.a` (material `thickness` property) | Per-pixel from GBuffer `CustomData`; shadow map depth for transmission distance |
-| **Transmission tint** | `transmissionTint = centerTint * transmissionTintColor` (view-global) | Per-profile `TransmissionTintColor`; applied to transmission profile result |
-| **Normal blending** | Blends geometric and shaded normals: `mix(macroNoL, detailNoL, 0.35 * sqrt(normalScale))` | Configurable `NormalScale` per profile; blends between geometric and shading normal |
-| **Source files** | `sssBlur.mat` (transmission block) | `BurleyNormalizedSSSCommon.ush` (`GetBurleyTransmissionProfile`), `TransmissionCommon.ush` |
+| **Model** | **Not implemented.** Parameters (`ior`, `extinctionScale`, `normalScale`, `scatteringDistribution`, `transmissionTintColor`, `transmissionMFPScaleFactor`) are declared in `SubsurfaceScatteringOptions`, passed from `PostProcessManager` to `sssBlur.mat`, and exposed in the sample app UI, but the shader **never reads them**. Helper functions `getPerpendicularScalingFactor3D()` and `getMfpFromDmfpApprox()` exist in the shader but are **unreferenced dead code**. | Full Burley transmission profile: `0.25 * A * (exp(-S*r) + 3*exp(-S*r/3))`; per-channel MFP; uses `GetPerpendicularScalingFactor3D()` for scaling; precomputed transmission profile (32 samples) with distance fade |
+| **Thickness source** | Per-pixel from MRT normal buffer `.a` (material `thickness` property) — stored but not consumed by blur | Per-pixel from GBuffer `CustomData`; shadow map depth for transmission distance |
+| **Source files** | `sssBlur.mat` (dead params only), `Options.h` (dead fields) | `BurleyNormalizedSSSCommon.ush` (`GetBurleyTransmissionProfile`), `TransmissionCommon.ush` |
 
 ### Stage 6: Debug / Visualization
 
 | Aspect | Filament | Unreal Engine |
 |---|---|---|
-| **Debug modes** | 8 modes: NONE, MEMBERSHIP, INFLUENCE, PRE_BLUR_DIFFUSE, POST_BLUR_DIFFUSE, TERMINATOR_WINDOW, BAND_MASK, TRANSMISSION | `SubsurfaceVisualizePS`: checkerboard overlay showing SSS pixels; `r.SSS.Checkerboard` visualization; buffer inspection via render doc / GPU profiler |
-| **Sample app** | `sample_sss_burley.cpp`: 4 presets (Unreal Reference, Skin, Marble, Wax); 4 viewpoints; ImGui controls; deterministic capture; markdown report generation | Material editor preview; SSS profile asset visualization in editor; no standalone sample |
+| **Debug modes** | 2 modes: `NONE` (normal rendering), `SCATTERING` (shows blurred diffuse × albedo without specular, `debugMode == 1`). Enum `SubsurfaceScatteringDebugMode` in `Options.h`. | `SubsurfaceVisualizePS`: checkerboard overlay showing SSS pixels; `r.SSS.Checkerboard` visualization; buffer inspection via render doc / GPU profiler |
+| **Sample app** | `sample_sss_burley.cpp`: ImGui controls for material (base color, roughness, metallic, reflectance), SSS (thickness, MFP distance/color, world unit scale), dual specular, blur pass (enable, sample count), light, debug views, and capture. Has dead UI sections for IOR, Transmission, Boundary, and Adaptive Sampling that map to dead Options.h fields. | Material editor preview; SSS profile asset visualization in editor; no standalone sample |
 | **Source files** | `Options.h`, `sample_sss_burley.cpp` | `PostProcessSubsurface.usf` (`SubsurfaceVisualizePS`), Editor UI |
 
 ### Stage 7: Pipeline Scheduling
@@ -146,11 +145,39 @@ Produce the comparison using the following stage-by-stage format. For each stage
 | Area | Filament Approach | Unreal Approach | Impact |
 |---|---|---|---|
 | **Profile system** | View-global + per-pixel MRT | Asset-based profile atlas (256 slots) | Filament cannot mix different SSS materials with different blur radii in one scene without manual MRT encoding |
-| **Blur algorithm** | Separable bilateral (fixed samples) | AFIS importance sampling (adaptive) + separable fallback | Unreal converges faster with fewer samples; handles varying radii per-pixel; temporal accumulation reduces per-frame cost |
+| **Blur algorithm** | Separable bilateral with CDF-based importance sampling (fixed sample count, default 11) | AFIS importance sampling (adaptive 8-64) + separable fallback | Both use CDF importance sampling; Unreal adds temporal accumulation + adaptive count. Filament has 3D radius correction matching UE. |
 | **Tile classification** | None | Indirect dispatch with tile buffers | Unreal skips non-SSS regions entirely; Filament processes every pixel (early-out on mask helps, but not equivalent) |
 | **Temporal integration** | Relies on TAA downstream | Built-in temporal reprojection in blur pass | Unreal's blur is temporally stable without TAA; Filament's blur can show frame-to-frame noise |
 | **Half-res** | Not available | Full pipeline support | Unreal has a performance fallback for mobile / low-end |
-| **Boundary handling** | No boundary color bleed | Per-profile BoundaryColorBleed | Filament may show color leaking at SSS/non-SSS material boundaries |
+| **Boundary handling** | Parameter declared but dead (not read by shader) | Per-profile BoundaryColorBleed | Filament may show color leaking at SSS/non-SSS material boundaries |
+| **Transmission** | Not implemented (params declared but dead) | Full Burley transmission profile | Filament has no back-scattering/thin-object translucency |
+| **Dead code** | 9 dead params, 2 dead shader functions, 4 dead UI sections | N/A | Cleanup needed before adding real transmission/boundary features |
+
+## Dead Code Inventory (Filament)
+
+The following parameters and code exist in the Filament SSS pipeline but are **not functionally wired** — they are declared, passed through the CPU side, and exposed in the sample app UI, but the shader (`sssBlur.mat`) never reads them:
+
+| Dead Parameter | Declared In | Passed In | Shader Status |
+|---|---|---|---|
+| `ior` | `Options.h` | `PostProcessManager.cpp` | Declared in `.mat` params but never read in fragment block |
+| `extinctionScale` | `Options.h` | `PostProcessManager.cpp` | Same |
+| `normalScale` | `Options.h` | `PostProcessManager.cpp` | Same |
+| `scatteringDistribution` | `Options.h` | `PostProcessManager.cpp` | Same |
+| `transmissionTintColor` | `Options.h` | `PostProcessManager.cpp` | Same |
+| `transmissionMFPScaleFactor` | `Options.h` | `PostProcessManager.cpp` | Same |
+| `boundaryColorBleed` | `Options.h` | `PostProcessManager.cpp` | Same |
+| `adaptiveSamples` | `Options.h` | `PostProcessManager.cpp` | Same |
+| `minSampleCount` | `Options.h` | `PostProcessManager.cpp` | Same |
+
+Dead shader functions in `sssBlur.mat`:
+- `getPerpendicularScalingFactor3D()` — declared but never called
+- `getMfpFromDmfpApprox()` — declared but never called
+
+Dead sample app UI sections:
+- IOR slider (maps to dead `ior`)
+- Transmission collapsing section (maps to dead transmission params)
+- Boundary collapsing section (maps to dead `boundaryColorBleed`)
+- Adaptive Sample Count checkbox + Min Samples slider (maps to dead adaptive params)
 
 ## Producing the Output
 
