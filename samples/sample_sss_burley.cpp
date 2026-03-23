@@ -321,9 +321,7 @@ struct App {
     float roughness1 = 1.3f;
     float lobeMix = 0.85f;
     bool sssEnabled = true;
-    int sssSampleCount = 11;
-    bool discSampling = false;
-    int discSampleCount = 64;
+    int sssSampleCount = 64;
     DebugView debugView = DebugView::FINAL;
 
     bool screenshotRequested = false;
@@ -575,8 +573,6 @@ void applyViewOptions(App& app) {
     SubsurfaceScatteringOptions sssOptions;
     sssOptions.enabled = app.sssEnabled;
     sssOptions.sampleCount = uint8_t(app.sssSampleCount);
-    sssOptions.discSampling = app.discSampling;
-    sssOptions.discSampleCount = uint8_t(app.discSampleCount);
     sssOptions.scatteringDistance = 1.0f;
     sssOptions.subsurfaceColor = float3{ 1.0f, 1.0f, 1.0f };
     sssOptions.worldUnitScale = app.worldUnitScale;
@@ -845,15 +841,7 @@ int main(int argc, char** argv) {
 
         if (ImGui::CollapsingHeader("SSS Blur Pass", ImGuiTreeNodeFlags_DefaultOpen)) {
             ImGui::Checkbox("Enable SSS Blur", &app.sssEnabled);
-            ImGui::Checkbox("Disc Sampling", &app.discSampling);
-            if (app.discSampling) {
-                ImGui::SliderInt("Disc Samples", &app.discSampleCount, 8, 128);
-            } else {
-                ImGui::SliderInt("Sample Count", &app.sssSampleCount, 3, 25);
-                if ((app.sssSampleCount & 1) == 0) {
-                    app.sssSampleCount++;
-                }
-            }
+            ImGui::SliderInt("Sample Count", &app.sssSampleCount, 8, 128);
         }
 
         if (ImGui::CollapsingHeader("Light")) {

@@ -785,9 +785,11 @@ enum class SubsurfaceScatteringDebugMode : uint8_t {
  * Unreal Engine's convention. The worldUnitScale parameter bridges between scene
  * units and cm.
  *
- * When enabled, a bilateral blur (separable or disc) is applied to the color buffer
- * after the color pass, using the Burley normalized diffusion kernel weighted by
- * depth to prevent light bleeding across depth discontinuities.
+ * When enabled, a single-pass 2D disc blur (importance-sampled Fibonacci spiral) is
+ * applied to the color buffer after the color pass, using the Burley normalized
+ * diffusion kernel weighted by depth to prevent light bleeding across depth
+ * discontinuities. This matches UE's AFIS (Adaptive Filtered Importance Sampling)
+ * approach.
  */
 struct SubsurfaceScatteringOptions {
     /**
@@ -796,10 +798,10 @@ struct SubsurfaceScatteringOptions {
     bool enabled = false;
 
     /**
-     * Number of samples per axis for the separable blur kernel (range: 3-25).
+     * Number of samples for the disc blur kernel (range: 8-128).
      * Higher values produce smoother scattering at the cost of performance.
      */
-    uint8_t sampleCount = 11;
+    uint8_t sampleCount = 64;
 
     /**
      * Global mean free path distance in centimeters (cm). Acts as a multiplier on the
@@ -833,19 +835,6 @@ struct SubsurfaceScatteringOptions {
      * Values are clamped to [0.05, 0.95].
      */
     math::float3 falloffColor = { 1.0f, 0.37f, 0.3f };
-
-    /**
-     * Use 2D disc (importance-sampled) blur instead of separable (H+V) passes.
-     * Disc sampling produces isotropic scatter without axis bias, at the cost of
-     * requiring more samples for equivalent quality.
-     */
-    bool discSampling = false;
-
-    /**
-     * Number of samples for disc sampling mode (range: 8-128).
-     * Only used when discSampling is true. Higher values reduce noise.
-     */
-    uint8_t discSampleCount = 64;
 
     /**
      * Optional debug visualization for the SSS setup / blur pass.

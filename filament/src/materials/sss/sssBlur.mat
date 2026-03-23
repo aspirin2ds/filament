@@ -3,23 +3,18 @@ material {
     parameters : [
         { type : sampler2d, name : color, precision: medium },
         { type : sampler2d, name : depth, precision: high },
-        { type : sampler2d, name : diffuse, precision: medium },
         { type : sampler2d, name : normal, precision: high },
         { type : sampler2d, name : params, precision: medium },
         { type : sampler2d, name : albedo, precision: medium },
         { type : sampler2d, name : setupDiffuse, precision: medium },
-        { type : float2, name : axis, precision: high },
         { type : float4, name : resolution, precision: high },
         { type : float, name : scatteringDistance, precision: high },
         { type : float3, name : subsurfaceColor, precision: medium },
         { type : float, name : worldUnitScale, precision: high },
         { type : float, name : cameraFar, precision: high },
         { type : int, name : sampleCount },
-        { type : float, name : projectedScale, precision: high },
         { type : float2, name : projectedScale2D, precision: high },
         { type : int, name : debugMode },
-        { type : int, name : passIndex },
-        { type : int, name : discSampling },
         { type : float3, name : sssAlbedo, precision: medium }
     ],
     variables : [
@@ -148,7 +143,11 @@ fragment {
 
         // Two-S approach matching UE SubsurfaceBurleyNormalized.ush:
         // Scalar S for sampling (UE: S = GetScalingFactor(SurfaceAlbedo.a))
-        float sssA = dot(materialParams.sssAlbedo, vec3(0.2126, 0.7152, 0.0722));
+        // UE's .a = albedo of dominant DMFP channel. Since both sssAlbedo and DMFP
+        // are derived from the same falloffColor (monotonic), max(sssAlbedo) ==
+        // sssAlbedo[indexOfMaxDMFP].
+        float sssA = max(materialParams.sssAlbedo.r,
+                max(materialParams.sssAlbedo.g, materialParams.sssAlbedo.b));
         float scalarS = getSearchLightDiffuseScalingFactor(sssA);
         // Per-channel S3D for profile (UE: S3D = GetScalingFactor3D(SurfaceAlbedo.xyz))
         vec3 S3D = getSearchLightDiffuseScalingFactor3D(materialParams.sssAlbedo);
@@ -177,8 +176,7 @@ fragment {
         return vec4(finalDiffuse + c.specular, centerColor.a);
     }
 
-    // ---- 2D disc blur (single-pass, importance-sampled Fibonacci spiral) ----
-    void discBlur(inout PostProcessInputs postProcess) {
+    void postProcess(inout PostProcessInputs postProcess) {
         highp vec2 uv = variable_vertex.xy;
         highp vec4 res = materialParams.resolution;
 
@@ -191,7 +189,7 @@ fragment {
             return;
         }
 
-        // Disc uses setupDiffuse (original MRT diffuse) in irradiance space
+        // Center diffuse in irradiance space (albedo divided out)
         vec3 centerDiffuse = c.setupDiffuse / c.albedo;
 
         // projectedScale2D is pixels-per-scene-unit at depth=1.
@@ -272,116 +270,5 @@ fragment {
         vec3 blurredDiffuse = mix(scatteredDiffuse, centerDiffuse, centerCdfWeight);
 
         postProcess.color = recombine(blurredDiffuse, c);
-    }
-
-    // ---- Separable blur (2-pass H+V) ----
-    void separableBlur(inout PostProcessInputs postProcess) {
-        highp vec2 uv = variable_vertex.xy;
-        highp vec4 res = materialParams.resolution;
-        bool recombinePass = materialParams.passIndex != 0;
-
-        vec4 centerColor = textureLod(materialParams_color, uv, 0.0);
-        vec4 centerBlurData = textureLod(materialParams_diffuse, uv, 0.0);
-        CenterInfo c = setupCenter(uv, res);
-
-        // Skip non-SSS pixels
-        if (c.depth > materialParams.cameraFar * 0.99 || c.depth < 0.001 || c.mask < 0.001) {
-            if (!recombinePass) {
-                postProcess.color = textureLod(materialParams_setupDiffuse, uv, 0.0);
-            } else {
-                postProcess.color = centerColor;
-            }
-            return;
-        }
-
-        vec3 centerSetupLighting = c.setupDiffuse / c.albedo;
-        vec3 centerDiffuse = recombinePass ? centerBlurData.rgb : centerSetupLighting;
-
-        // projectedScale is pixels-per-scene-unit at depth=1.
-        // Convert to pixels-per-cm: divide by (depth * worldUnitScale).
-        float wus = max(materialParams.worldUnitScale, 1e-5);
-        float pixelScale_cm = materialParams.projectedScale / (c.depth * wus);
-
-        // Center sample reweighting — half-pixel radius in cm
-        float centerPixelRadius = 0.5 / max(pixelScale_cm, 1e-5);
-        // Per-channel center CDF using centerD (UE: CalculateCenterSampleWeight)
-        vec3 centerCdfWeight = vec3(
-            burleyCdf(centerPixelRadius, c.centerD.r),
-            burleyCdf(centerPixelRadius, c.centerD.g),
-            burleyCdf(centerPixelRadius, c.centerD.b));
-        // Scalar center CDF for sample range remapping (UE: CalculateCenterSampleCdf)
-        float centerCdfScalar = burleyCdf(centerPixelRadius, c.dominantD);
-
-        vec3 totalDiffuse = centerDiffuse * centerCdfWeight;
-        vec3 totalWeight = centerCdfWeight;
-        int halfSamples = materialParams.sampleCount / 2;
-
-        for (int i = 1; i <= halfSamples; i++) {
-            float xi_raw = float(i) / float(halfSamples + 1);
-            float xi = centerCdfScalar + xi_raw * (1.0 - centerCdfScalar);
-            float dist_cm = burleyCdfInverse(xi, c.dominantD);  // cm
-            float samplePixels = dist_cm * pixelScale_cm;
-
-            vec2 offset = materialParams.axis * res.zw * samplePixels;
-            float pdf = max(burleyPdf(dist_cm, c.dominantD), 1e-5);
-
-            // Positive direction
-            vec2 uvP = uv + offset;
-            vec4 diffuseDataP = textureLod(materialParams_diffuse, uvP, 0.0);
-            highp float depthP = -linearizeDepth(textureLod(materialParams_depth, uvP, 0.0).r);
-            float maskP = diffuseDataP.a;
-            highp vec3 normalP = estimateSmoothedStoredNormal(uvP, res, 1.0);
-
-            // 3D radius correction: depth delta converted from scene units to cm
-            float deltaDepthP_cm = (depthP - c.depth) * wus;
-            float radius3DP = sqrt(dist_cm * dist_cm + deltaDepthP_cm * deltaDepthP_cm);
-            vec3 kernelWeightP = burleyProfile3(radius3DP, c.D) / pdf;
-            float filterP = normalWeight(c.macroNormal, normalP) * maskP;
-            vec3 wP = kernelWeightP * filterP;
-
-            vec3 diffuseP = diffuseDataP.rgb;
-            if (!recombinePass) {
-                diffuseP /= sampleSurfaceAlbedo(uvP);
-            }
-            totalDiffuse += diffuseP * wP;
-            totalWeight += wP;
-
-            // Negative direction
-            vec2 uvN = uv - offset;
-            vec4 diffuseDataN = textureLod(materialParams_diffuse, uvN, 0.0);
-            highp float depthN = -linearizeDepth(textureLod(materialParams_depth, uvN, 0.0).r);
-            float maskN = diffuseDataN.a;
-            highp vec3 normalN = estimateSmoothedStoredNormal(uvN, res, 1.0);
-
-            float deltaDepthN_cm = (depthN - c.depth) * wus;
-            float radius3DN = sqrt(dist_cm * dist_cm + deltaDepthN_cm * deltaDepthN_cm);
-            vec3 kernelWeightN = burleyProfile3(radius3DN, c.D) / pdf;
-            float filterN = normalWeight(c.macroNormal, normalN) * maskN;
-            vec3 wN = kernelWeightN * filterN;
-
-            vec3 diffuseN = diffuseDataN.rgb;
-            if (!recombinePass) {
-                diffuseN /= sampleSurfaceAlbedo(uvN);
-            }
-            totalDiffuse += diffuseN * wN;
-            totalWeight += wN;
-        }
-
-        vec3 blurredDiffuse = totalDiffuse / max(totalWeight, vec3(1e-4));
-
-        if (!recombinePass) {
-            postProcess.color = vec4(blurredDiffuse, c.mask);
-            return;
-        }
-
-        postProcess.color = recombine(blurredDiffuse, c);
-    }
-
-    void postProcess(inout PostProcessInputs postProcess) {
-        if (materialParams.discSampling != 0) {
-            discBlur(postProcess);
-        } else {
-            separableBlur(postProcess);
-        }
     }
 }

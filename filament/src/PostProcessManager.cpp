@@ -1259,17 +1259,13 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::subsurfaceScatteringBlur(Fra
     float const scatteringDistance = options.scatteringDistance * dmfpScale;
     math::float3 const subsurfaceColor = options.subsurfaceColor * dmfpRatios;
     float const worldUnitScale = options.worldUnitScale;
-    bool const discSampling = options.discSampling;
-    int32_t const separableSampleCount = int32_t(options.sampleCount);
-    int32_t const discSampleCount = int32_t(options.discSampleCount);
-    int32_t const sampleCount = discSampling ? discSampleCount : separableSampleCount;
+    int32_t const sampleCount = int32_t(options.sampleCount);
     int32_t const debugMode = int32_t(options.debugMode);
     math::float2 const projectedScale2D = { projectedScaleX, projectedScaleY };
 
-    // Horizontal pass
+    // Single-pass disc blur (importance-sampled Fibonacci spiral), matching UE's AFIS approach.
     struct SSSBlurData {
         FrameGraphId<FrameGraphTexture> input;
-        FrameGraphId<FrameGraphTexture> diffuse;
         FrameGraphId<FrameGraphTexture> setupDiffuse;
         FrameGraphId<FrameGraphTexture> normal;
         FrameGraphId<FrameGraphTexture> params;
@@ -1278,129 +1274,89 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::subsurfaceScatteringBlur(Fra
         FrameGraphId<FrameGraphTexture> output;
     };
 
-    auto sssBlurPass = [&](FrameGraph& fg, FrameGraphId<FrameGraphTexture> colorInput,
-            FrameGraphId<FrameGraphTexture> diffuseInput,
-            FrameGraphId<FrameGraphTexture> setupDiffuseInput,
-            FrameGraphId<FrameGraphTexture> normalInput,
-            FrameGraphId<FrameGraphTexture> paramsInput,
-            FrameGraphId<FrameGraphTexture> albedoInput,
-            FrameGraphId<FrameGraphTexture> depthInput,
-            math::float2 axis, float projectedScale, int32_t passIndex, int32_t passDebugMode,
-            const char* passName)
-            -> FrameGraphId<FrameGraphTexture> {
+    auto const& desc = fg.getDescriptor(input);
 
-        auto const& desc = fg.getDescriptor(colorInput);
+    auto& pass = fg.addPass<SSSBlurData>("SSS Blur",
+            [&](FrameGraph::Builder& builder, auto& data) {
+                data.input = builder.sample(input);
+                data.setupDiffuse = builder.sample(diffuse);
+                data.normal = builder.sample(normal);
+                data.params = builder.sample(params);
+                data.albedo = builder.sample(albedo);
+                data.depth = builder.sample(depth);
 
-        auto& pass = fg.addPass<SSSBlurData>(passName,
-                [&](FrameGraph::Builder& builder, auto& data) {
-                    data.input = builder.sample(colorInput);
-                    data.diffuse = builder.sample(diffuseInput);
-                    data.setupDiffuse = builder.sample(setupDiffuseInput);
-                    data.normal = builder.sample(normalInput);
-                    data.params = builder.sample(paramsInput);
-                    data.albedo = builder.sample(albedoInput);
-                    data.depth = builder.sample(depthInput);
+                data.output = builder.createTexture("SSS Blurred", {
+                        .width = desc.width,
+                        .height = desc.height,
+                        .format = desc.format });
+                data.output = builder.write(data.output,
+                        FrameGraphTexture::Usage::COLOR_ATTACHMENT);
 
-                    data.output = builder.createTexture("SSS Blurred", {
-                            .width = desc.width,
-                            .height = desc.height,
-                            .format = desc.format });
-                    data.output = builder.write(data.output,
-                            FrameGraphTexture::Usage::COLOR_ATTACHMENT);
-
-                    builder.declareRenderPass("SSS Blur Target", {
-                            .attachments = { .color = { data.output } },
-                            .clearFlags = TargetBufferFlags::NONE
-                    });
-                },
-                [=, this](FrameGraphResources const& resources,
-                        auto const& data, DriverApi& driver) {
-                    bindPostProcessDescriptorSet(driver);
-                    bindPerRenderableDescriptorSet(driver);
-
-                    auto colorTex = resources.getTexture(data.input);
-                    auto diffuseTex = resources.getTexture(data.diffuse);
-                    auto setupDiffuseTex = resources.getTexture(data.setupDiffuse);
-                    auto normalTex = resources.getTexture(data.normal);
-                    auto paramsTex = resources.getTexture(data.params);
-                    auto albedoTex = resources.getTexture(data.albedo);
-                    auto depthTex = resources.getTexture(data.depth);
-                    auto out = resources.getRenderPassInfo();
-                    auto const& outDesc = resources.getDescriptor(data.output);
-
-                    auto& material = getPostProcessMaterial("sssBlur");
-                    FMaterial const* const ma = material.getMaterial(mEngine, driver);
-                    FMaterialInstance* const mi = getMaterialInstance(ma);
-
-                    mi->setParameter("color", colorTex, {
-                            .filterMag = SamplerMagFilter::LINEAR,
-                            .filterMin = SamplerMinFilter::LINEAR_MIPMAP_NEAREST
-                    });
-                    mi->setParameter("diffuse", diffuseTex, {
-                            .filterMag = SamplerMagFilter::LINEAR,
-                            .filterMin = SamplerMinFilter::LINEAR_MIPMAP_NEAREST
-                    });
-                    mi->setParameter("setupDiffuse", setupDiffuseTex, {
-                            .filterMag = SamplerMagFilter::LINEAR,
-                            .filterMin = SamplerMinFilter::LINEAR_MIPMAP_NEAREST
-                    });
-                    mi->setParameter("normal", normalTex, {
-                            .filterMag = SamplerMagFilter::LINEAR,
-                            .filterMin = SamplerMinFilter::LINEAR_MIPMAP_NEAREST
-                    });
-                    mi->setParameter("params", paramsTex, {
-                            .filterMag = SamplerMagFilter::LINEAR,
-                            .filterMin = SamplerMinFilter::LINEAR_MIPMAP_NEAREST
-                    });
-                    mi->setParameter("albedo", albedoTex, {
-                            .filterMag = SamplerMagFilter::LINEAR,
-                            .filterMin = SamplerMinFilter::LINEAR_MIPMAP_NEAREST
-                    });
-                    mi->setParameter("depth", depthTex, {});
-                    mi->setParameter("axis", axis);
-                    mi->setParameter("resolution",
-                            math::float4{ float(outDesc.width), float(outDesc.height),
-                                    1.0f / float(outDesc.width), 1.0f / float(outDesc.height) });
-                    mi->setParameter("scatteringDistance", scatteringDistance);
-                    mi->setParameter("subsurfaceColor", subsurfaceColor);
-                    mi->setParameter("worldUnitScale", worldUnitScale);
-                    mi->setParameter("sampleCount", sampleCount);
-                    mi->setParameter("projectedScale", projectedScale);
-                    mi->setParameter("projectedScale2D", projectedScale2D);
-                    mi->setParameter("cameraFar", cameraFar);
-                    mi->setParameter("debugMode", passDebugMode);
-                    mi->setParameter("passIndex", passIndex);
-                    mi->setParameter("discSampling", discSampling ? 1 : 0);
-                    mi->setParameter("sssAlbedo", sssAlbedo);
-
-                    mi->commit(driver, getUboManager());
-                    mi->use(driver);
-
-                    auto pipeline = getPipelineState(ma);
-                    renderFullScreenQuad(out, pipeline, driver);
-                    unbindAllDescriptorSets(driver);
+                builder.declareRenderPass("SSS Blur Target", {
+                        .attachments = { .color = { data.output } },
+                        .clearFlags = TargetBufferFlags::NONE
                 });
+            },
+            [=, this](FrameGraphResources const& resources,
+                    auto const& data, DriverApi& driver) {
+                bindPostProcessDescriptorSet(driver);
+                bindPerRenderableDescriptorSet(driver);
 
-        return pass->output;
-    };
+                auto colorTex = resources.getTexture(data.input);
+                auto setupDiffuseTex = resources.getTexture(data.setupDiffuse);
+                auto normalTex = resources.getTexture(data.normal);
+                auto paramsTex = resources.getTexture(data.params);
+                auto albedoTex = resources.getTexture(data.albedo);
+                auto depthTex = resources.getTexture(data.depth);
+                auto out = resources.getRenderPassInfo();
+                auto const& outDesc = resources.getDescriptor(data.output);
 
-    if (discSampling) {
-        // Disc sampling: single pass, reads setupDiffuse directly, recombines in-shader
-        auto output = sssBlurPass(
-                fg, input, diffuse, diffuse, normal, params, albedo, depth,
-                { 0.0f, 0.0f }, 0.0f, 1, debugMode, "SSS Blur Disc");
-        return output;
-    }
+                auto& material = getPostProcessMaterial("sssBlur");
+                FMaterial const* const ma = material.getMaterial(mEngine, driver);
+                FMaterialInstance* const mi = getMaterialInstance(ma);
 
-    // Separable: horizontal then vertical blur with per-axis projected scale
-    auto intermediate = sssBlurPass(
-            fg, input, diffuse, diffuse, normal, params, albedo, depth, { 1.0f, 0.0f }, projectedScaleX,
-            0, 0, "SSS Blur H");
-    auto output = sssBlurPass(
-            fg, input, intermediate, diffuse, normal, params, albedo, depth, { 0.0f, 1.0f }, projectedScaleY,
-            1, debugMode, "SSS Blur V");
+                mi->setParameter("color", colorTex, {
+                        .filterMag = SamplerMagFilter::LINEAR,
+                        .filterMin = SamplerMinFilter::LINEAR_MIPMAP_NEAREST
+                });
+                mi->setParameter("setupDiffuse", setupDiffuseTex, {
+                        .filterMag = SamplerMagFilter::LINEAR,
+                        .filterMin = SamplerMinFilter::LINEAR_MIPMAP_NEAREST
+                });
+                mi->setParameter("normal", normalTex, {
+                        .filterMag = SamplerMagFilter::LINEAR,
+                        .filterMin = SamplerMinFilter::LINEAR_MIPMAP_NEAREST
+                });
+                mi->setParameter("params", paramsTex, {
+                        .filterMag = SamplerMagFilter::LINEAR,
+                        .filterMin = SamplerMinFilter::LINEAR_MIPMAP_NEAREST
+                });
+                mi->setParameter("albedo", albedoTex, {
+                        .filterMag = SamplerMagFilter::LINEAR,
+                        .filterMin = SamplerMinFilter::LINEAR_MIPMAP_NEAREST
+                });
+                mi->setParameter("depth", depthTex, {});
+                mi->setParameter("resolution",
+                        math::float4{ float(outDesc.width), float(outDesc.height),
+                                1.0f / float(outDesc.width), 1.0f / float(outDesc.height) });
+                mi->setParameter("scatteringDistance", scatteringDistance);
+                mi->setParameter("subsurfaceColor", subsurfaceColor);
+                mi->setParameter("worldUnitScale", worldUnitScale);
+                mi->setParameter("sampleCount", sampleCount);
+                mi->setParameter("projectedScale2D", projectedScale2D);
+                mi->setParameter("cameraFar", cameraFar);
+                mi->setParameter("debugMode", debugMode);
+                mi->setParameter("sssAlbedo", sssAlbedo);
 
-    return output;
+                mi->commit(driver, getUboManager());
+                mi->use(driver);
+
+                auto pipeline = getPipelineState(ma);
+                renderFullScreenQuad(out, pipeline, driver);
+                unbindAllDescriptorSets(driver);
+            });
+
+    return pass->output;
 }
 
 FrameGraphId<FrameGraphTexture> PostProcessManager::generateGaussianMipmap(FrameGraph& fg,
