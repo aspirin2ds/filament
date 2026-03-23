@@ -13,20 +13,14 @@ material {
         { type : float, name : scatteringDistance, precision: high },
         { type : float3, name : subsurfaceColor, precision: medium },
         { type : float, name : worldUnitScale, precision: high },
-        { type : float, name : ior, precision: high },
-        { type : float, name : extinctionScale, precision: high },
-        { type : float, name : normalScale, precision: high },
-        { type : float, name : scatteringDistribution, precision: high },
-        { type : float3, name : transmissionTintColor, precision: medium },
-        { type : float, name : transmissionMFPScaleFactor, precision: high },
-        { type : float3, name : boundaryColorBleed, precision: medium },
         { type : float, name : cameraFar, precision: high },
         { type : int, name : sampleCount },
         { type : float, name : projectedScale, precision: high },
-        { type : int, name : adaptiveSamples },
-        { type : int, name : minSampleCount },
+        { type : float2, name : projectedScale2D, precision: high },
         { type : int, name : debugMode },
-        { type : int, name : passIndex }
+        { type : int, name : passIndex },
+        { type : int, name : discSampling },
+        { type : float3, name : sssAlbedo, precision: medium }
     ],
     variables : [
         vertex
@@ -84,14 +78,10 @@ fragment {
         return vec3(3.5) + 100.0 * value * value * value * value;
     }
 
-    vec3 getPerpendicularScalingFactor3D(vec3 surfaceAlbedo) {
-        vec3 value = abs(surfaceAlbedo - vec3(0.8));
-        return vec3(1.85) - surfaceAlbedo + 7.0 * value * value * value;
-    }
-
-    vec3 getMfpFromDmfpApprox(vec3 surfaceAlbedo, vec3 dmfp) {
-        return 0.6 * getPerpendicularScalingFactor3D(surfaceAlbedo) /
-                getSearchLightDiffuseScalingFactor3D(surfaceAlbedo) * dmfp;
+    // Scalar version — matches UE's GetScalingFactor(A) used for sampling D.
+    float getSearchLightDiffuseScalingFactor(float surfaceAlbedo) {
+        float value = surfaceAlbedo - 0.33;
+        return 3.5 + 100.0 * value * value * value * value;
     }
 
     highp float linearizeDepth(highp float depth) {
@@ -126,71 +116,214 @@ fragment {
         return sqrt(saturate(dot(centerNormal, sampleNormal) * 0.5 + 0.5));
     }
 
-    void postProcess(inout PostProcessInputs postProcess) {
+    // Shared setup: compute scattering parameters from center pixel data.
+    struct CenterInfo {
+        vec3 albedo;
+        vec3 setupDiffuse;
+        vec3 specular;
+        highp vec3 macroNormal;
+        vec3 D;          // Profile D = DMFP.xyz / S3D (per-channel, for kernel evaluation)
+        vec3 centerD;    // Center weight D = scalarDMFP / S3D (per-channel, for center CDF)
+        float dominantD; // Sampling D = scalarDMFP / scalarS (scalar, for CDF inverse + PDF)
+        highp float depth;
+        float mask;
+    };
+
+    CenterInfo setupCenter(highp vec2 uv, highp vec4 res) {
+        CenterInfo c;
+        vec4 centerSetupData = textureLod(materialParams_setupDiffuse, uv, 0.0);
+        vec4 centerParamsData = textureLod(materialParams_params, uv, 0.0);
+        c.albedo = max(textureLod(materialParams_albedo, uv, 0.0).rgb, vec3(1e-3));
+        c.depth = -linearizeDepth(textureLod(materialParams_depth, uv, 0.0).r);
+        c.mask = centerSetupData.a;
+        c.setupDiffuse = centerSetupData.rgb;
+        vec4 centerColor = textureLod(materialParams_color, uv, 0.0);
+        c.specular = max(centerColor.rgb - c.setupDiffuse, vec3(0.0));
+        c.macroNormal = estimateSmoothedStoredNormal(uv, res, 1.0);
+        // Scattering parameters — all distances in centimeters (cm).
+        // Per-pixel scatteringDistance (cm) * view-level multiplier (cm).
+        vec3 centerTint = saturate(centerParamsData.rgb * materialParams.subsurfaceColor);
+        float sd_cm = max(centerParamsData.a * materialParams.scatteringDistance, 0.001);
+        vec3 dmfp_cm = max(centerTint * sd_cm, vec3(0.001));
+
+        // Two-S approach matching UE SubsurfaceBurleyNormalized.ush:
+        // Scalar S for sampling (UE: S = GetScalingFactor(SurfaceAlbedo.a))
+        float sssA = dot(materialParams.sssAlbedo, vec3(0.2126, 0.7152, 0.0722));
+        float scalarS = getSearchLightDiffuseScalingFactor(sssA);
+        // Per-channel S3D for profile (UE: S3D = GetScalingFactor3D(SurfaceAlbedo.xyz))
+        vec3 S3D = getSearchLightDiffuseScalingFactor3D(materialParams.sssAlbedo);
+        // Scalar DMFP representative (UE: DMFP.a)
+        float scalarDmfp = max(dmfp_cm.r, max(dmfp_cm.g, dmfp_cm.b));
+
+        // Profile D: DMFP.xyz / S3D — per-channel, for kernel evaluation
+        // (UE: GetDiffuseReflectProfileWithDiffuseMeanFreePath uses L=DMFP.xyz, S3D)
+        c.D = dmfp_cm / S3D;
+        // Center weight D: scalarDMFP / S3D — per-channel, for center CDF reweighting
+        // (UE: CalculateCenterSampleWeight line 753: D = DMFP.a / S3D)
+        c.centerD = vec3(scalarDmfp) / S3D;
+        // Sampling D: scalarDMFP / scalarS — scalar, for CDF inverse + PDF
+        // (UE: GenerateSampleInfo line 184: D = DMFP.a / S)
+        c.dominantD = scalarDmfp / scalarS;
+        return c;
+    }
+
+    vec4 recombine(vec3 blurredDiffuse, CenterInfo c) {
+        vec4 centerColor = textureLod(materialParams_color,
+                variable_vertex.xy, 0.0);
+        if (materialParams.debugMode == 1) {
+            return vec4(blurredDiffuse * c.albedo, 1.0);
+        }
+        vec3 finalDiffuse = blurredDiffuse * c.albedo;
+        return vec4(finalDiffuse + c.specular, centerColor.a);
+    }
+
+    // ---- 2D disc blur (single-pass, importance-sampled Fibonacci spiral) ----
+    void discBlur(inout PostProcessInputs postProcess) {
+        highp vec2 uv = variable_vertex.xy;
+        highp vec4 res = materialParams.resolution;
+
+        vec4 centerColor = textureLod(materialParams_color, uv, 0.0);
+        CenterInfo c = setupCenter(uv, res);
+
+        // Skip non-SSS pixels
+        if (c.depth > materialParams.cameraFar * 0.99 || c.depth < 0.001 || c.mask < 0.001) {
+            postProcess.color = centerColor;
+            return;
+        }
+
+        // Disc uses setupDiffuse (original MRT diffuse) in irradiance space
+        vec3 centerDiffuse = c.setupDiffuse / c.albedo;
+
+        // projectedScale2D is pixels-per-scene-unit at depth=1.
+        // Convert to pixels-per-cm at this depth:
+        //   pixelScale_cm = projectedScale / (depth * worldUnitScale)
+        // since worldUnitScale = cm/scene-unit.
+        float wus = max(materialParams.worldUnitScale, 1e-5);
+        highp vec2 pixelScale2D_cm = materialParams.projectedScale2D / (c.depth * wus);
+
+        // Center pixel radius in cm: average half-pixel in X and Y
+        float centerPixelRadius = 0.5 * (1.0 / max(pixelScale2D_cm.x, 1e-5)
+                + 1.0 / max(pixelScale2D_cm.y, 1e-5)) * 0.5;
+        // Per-channel center CDF using centerD (UE: CalculateCenterSampleWeight)
+        vec3 centerCdfWeight = vec3(
+            burleyCdf(centerPixelRadius, c.centerD.r),
+            burleyCdf(centerPixelRadius, c.centerD.g),
+            burleyCdf(centerPixelRadius, c.centerD.b));
+        // Scalar center CDF for sample range remapping (UE: CalculateCenterSampleCdf)
+        float centerCdfScalar = burleyCdf(centerPixelRadius, c.dominantD);
+
+        // Fibonacci golden angle for angular distribution
+        const float GOLDEN_ANGLE = 2.39996323;  // pi * (3 - sqrt(5))
+        int numSamples = materialParams.sampleCount;
+
+        vec3 totalDiffuse = vec3(0.0);
+        vec3 totalWeight = vec3(0.0);
+
+        for (int i = 0; i < numSamples; i++) {
+            // Stratified radius via CDF inverse, remapped to [centerCdf, 1]
+            float xi_raw = (float(i) + 0.5) / float(numSamples);
+            float xi = centerCdfScalar + xi_raw * (1.0 - centerCdfScalar);
+            float dist_cm = burleyCdfInverse(xi, c.dominantD);  // radius in cm
+
+            // Golden-angle Fibonacci spiral for angle
+            float theta = float(i) * GOLDEN_ANGLE;
+            float cosTheta = cos(theta);
+            float sinTheta = sin(theta);
+
+            // Convert cm radius to UV offset (aspect-corrected, pixels then UV)
+            highp vec2 offset = vec2(
+                dist_cm * pixelScale2D_cm.x * cosTheta,
+                dist_cm * pixelScale2D_cm.y * sinTheta) * res.zw;
+
+            vec2 sampleUV = uv + offset;
+
+            // Read sample data
+            vec4 diffuseData = textureLod(materialParams_setupDiffuse, sampleUV, 0.0);
+            highp float sampleDepth = -linearizeDepth(
+                    textureLod(materialParams_depth, sampleUV, 0.0).r);
+            float sampleMask = diffuseData.a;
+            highp vec3 sampleNormal = estimateSmoothedStoredNormal(sampleUV, res, 1.0);
+
+            // 3D radius correction: convert depth delta from scene units to cm
+            float deltaDepth_cm = (sampleDepth - c.depth) * wus;
+            float radius3D = sqrt(dist_cm * dist_cm + deltaDepth_cm * deltaDepth_cm);
+
+            // Importance sampling weight: r*R(r) / pdf (all in cm)
+            // 2D disc integral has Jacobian r: ∫∫ R(r)*L*r dr dθ
+            // UE uses rR(r) (GetDiffuseReflectProfileWithDiffuseMeanFreePath returns rR(r))
+            float pdf = max(burleyPdf(dist_cm, c.dominantD), 1e-5);
+            vec3 kernelWeight = burleyProfile3(radius3D, c.D) * radius3D / pdf;
+
+            // Bilateral filter: normal weight + mask (matches UE Step 3+mask).
+            // Depth is handled only via 3D radius correction above.
+            float bilateral = normalWeight(c.macroNormal, sampleNormal) * sampleMask;
+            vec3 w = kernelWeight * bilateral;
+
+            // Sample diffuse in irradiance space
+            vec3 sampleDiffuse = diffuseData.rgb / sampleSurfaceAlbedo(sampleUV);
+
+            totalDiffuse += sampleDiffuse * w;
+            totalWeight += w;
+        }
+
+        // Normalize scatter samples, then lerp with center using CDF weight
+        // (matches UE SubsurfaceBurleyNormalized.ush:989-991)
+        vec3 scatteredDiffuse = totalDiffuse / max(totalWeight, vec3(1e-4));
+        vec3 blurredDiffuse = mix(scatteredDiffuse, centerDiffuse, centerCdfWeight);
+
+        postProcess.color = recombine(blurredDiffuse, c);
+    }
+
+    // ---- Separable blur (2-pass H+V) ----
+    void separableBlur(inout PostProcessInputs postProcess) {
         highp vec2 uv = variable_vertex.xy;
         highp vec4 res = materialParams.resolution;
         bool recombinePass = materialParams.passIndex != 0;
 
         vec4 centerColor = textureLod(materialParams_color, uv, 0.0);
         vec4 centerBlurData = textureLod(materialParams_diffuse, uv, 0.0);
-        vec4 centerSetupData = textureLod(materialParams_setupDiffuse, uv, 0.0);
-        vec4 centerParamsData = textureLod(materialParams_params, uv, 0.0);
-        vec3 centerAlbedo = max(textureLod(materialParams_albedo, uv, 0.0).rgb, vec3(1e-3));
-        highp float centerDepth = -linearizeDepth(textureLod(materialParams_depth, uv, 0.0).r);
-        float centerMask = centerSetupData.a;
+        CenterInfo c = setupCenter(uv, res);
 
         // Skip non-SSS pixels
-        if (centerDepth > materialParams.cameraFar * 0.99 || centerDepth < 0.001 || centerMask < 0.001) {
+        if (c.depth > materialParams.cameraFar * 0.99 || c.depth < 0.001 || c.mask < 0.001) {
             if (!recombinePass) {
-                postProcess.color = centerSetupData;
+                postProcess.color = textureLod(materialParams_setupDiffuse, uv, 0.0);
             } else {
                 postProcess.color = centerColor;
             }
             return;
         }
 
-        vec3 centerSetupLighting = centerSetupData.rgb / centerAlbedo;
+        vec3 centerSetupLighting = c.setupDiffuse / c.albedo;
         vec3 centerDiffuse = recombinePass ? centerBlurData.rgb : centerSetupLighting;
-        vec3 centerSetupDiffuse = centerSetupData.rgb;
-        vec3 centerSpecular = max(centerColor.rgb - centerSetupDiffuse, vec3(0.0));
-        highp vec3 centerMacroNormal = estimateSmoothedStoredNormal(uv, res, 1.0);
-        vec3 centerTint = saturate(centerParamsData.rgb * materialParams.subsurfaceColor);
-        float sd = max(centerParamsData.a * materialParams.scatteringDistance, 0.001);
-        float scaledSd = sd * materialParams.worldUnitScale;
-        vec3 centerDmfp = max(centerTint * scaledSd, vec3(0.001));
-        vec3 centerD = centerDmfp / getSearchLightDiffuseScalingFactor3D(centerAlbedo);
-        // Dominant D for sample placement (use channel with largest scatter distance).
-        float dominantD = max(centerD.r, max(centerD.g, centerD.b));
 
-        float pixelScale = materialParams.projectedScale / centerDepth;
+        // projectedScale is pixels-per-scene-unit at depth=1.
+        // Convert to pixels-per-cm: divide by (depth * worldUnitScale).
+        float wus = max(materialParams.worldUnitScale, 1e-5);
+        float pixelScale_cm = materialParams.projectedScale / (c.depth * wus);
 
-        // Center sample reweighting (matches UE SubsurfaceBurleyNormalized.ush:838-860).
-        // The center pixel covers a half-pixel radius along the blur axis. Its weight
-        // is the per-channel CDF at that radius — the fraction of profile energy that
-        // falls within the center pixel. Scatter samples are remapped to only cover the
-        // remaining [centerCdf, 1] range, avoiding redundant near-center samples.
-        float centerPixelRadius = 0.5 / max(pixelScale, 1e-5);
+        // Center sample reweighting — half-pixel radius in cm
+        float centerPixelRadius = 0.5 / max(pixelScale_cm, 1e-5);
+        // Per-channel center CDF using centerD (UE: CalculateCenterSampleWeight)
         vec3 centerCdfWeight = vec3(
-            burleyCdf(centerPixelRadius, centerD.r),
-            burleyCdf(centerPixelRadius, centerD.g),
-            burleyCdf(centerPixelRadius, centerD.b));
-        float centerCdfScalar = burleyCdf(centerPixelRadius, dominantD);
+            burleyCdf(centerPixelRadius, c.centerD.r),
+            burleyCdf(centerPixelRadius, c.centerD.g),
+            burleyCdf(centerPixelRadius, c.centerD.b));
+        // Scalar center CDF for sample range remapping (UE: CalculateCenterSampleCdf)
+        float centerCdfScalar = burleyCdf(centerPixelRadius, c.dominantD);
 
         vec3 totalDiffuse = centerDiffuse * centerCdfWeight;
         vec3 totalWeight = centerCdfWeight;
         int halfSamples = materialParams.sampleCount / 2;
 
         for (int i = 1; i <= halfSamples; i++) {
-            // Remap xi to [centerCdf, 1] — only sample outside the center pixel.
             float xi_raw = float(i) / float(halfSamples + 1);
             float xi = centerCdfScalar + xi_raw * (1.0 - centerCdfScalar);
-            float worldDist = burleyCdfInverse(xi, dominantD);
-            float samplePixels = worldDist * pixelScale;
+            float dist_cm = burleyCdfInverse(xi, c.dominantD);  // cm
+            float samplePixels = dist_cm * pixelScale_cm;
 
             vec2 offset = materialParams.axis * res.zw * samplePixels;
-
-            // Importance sampling PDF from the dominant (widest) channel.
-            float pdf = max(burleyPdf(worldDist, dominantD), 1e-5);
+            float pdf = max(burleyPdf(dist_cm, c.dominantD), 1e-5);
 
             // Positive direction
             vec2 uvP = uv + offset;
@@ -199,14 +332,11 @@ fragment {
             float maskP = diffuseDataP.a;
             highp vec3 normalP = estimateSmoothedStoredNormal(uvP, res, 1.0);
 
-            // 3D radius correction: fold depth delta into the scatter distance so the
-            // profile's own exponential decay handles curvature naturally (matches UE's
-            // SubsurfaceBurleyNormalized.ush:944-945). Both worldDist and depth are in
-            // world units (worldUnitScale is already baked into centerD/dominantD).
-            float deltaDepthP = depthP - centerDepth;
-            float radius3DP = sqrt(worldDist * worldDist + deltaDepthP * deltaDepthP);
-            vec3 kernelWeightP = burleyProfile3(radius3DP, centerD) / pdf;
-            float filterP = normalWeight(centerMacroNormal, normalP) * maskP;
+            // 3D radius correction: depth delta converted from scene units to cm
+            float deltaDepthP_cm = (depthP - c.depth) * wus;
+            float radius3DP = sqrt(dist_cm * dist_cm + deltaDepthP_cm * deltaDepthP_cm);
+            vec3 kernelWeightP = burleyProfile3(radius3DP, c.D) / pdf;
+            float filterP = normalWeight(c.macroNormal, normalP) * maskP;
             vec3 wP = kernelWeightP * filterP;
 
             vec3 diffuseP = diffuseDataP.rgb;
@@ -223,10 +353,10 @@ fragment {
             float maskN = diffuseDataN.a;
             highp vec3 normalN = estimateSmoothedStoredNormal(uvN, res, 1.0);
 
-            float deltaDepthN = depthN - centerDepth;
-            float radius3DN = sqrt(worldDist * worldDist + deltaDepthN * deltaDepthN);
-            vec3 kernelWeightN = burleyProfile3(radius3DN, centerD) / pdf;
-            float filterN = normalWeight(centerMacroNormal, normalN) * maskN;
+            float deltaDepthN_cm = (depthN - c.depth) * wus;
+            float radius3DN = sqrt(dist_cm * dist_cm + deltaDepthN_cm * deltaDepthN_cm);
+            vec3 kernelWeightN = burleyProfile3(radius3DN, c.D) / pdf;
+            float filterN = normalWeight(c.macroNormal, normalN) * maskN;
             vec3 wN = kernelWeightN * filterN;
 
             vec3 diffuseN = diffuseDataN.rgb;
@@ -239,21 +369,19 @@ fragment {
 
         vec3 blurredDiffuse = totalDiffuse / max(totalWeight, vec3(1e-4));
 
-        // Pass 1 (H-blur): output blurred diffuse in lighting space
         if (!recombinePass) {
-            postProcess.color = vec4(blurredDiffuse, centerMask);
+            postProcess.color = vec4(blurredDiffuse, c.mask);
             return;
         }
 
-        // Pass 2 (V-blur + recombine):
-        // debugMode 1 = scattering only (blurred diffuse, no specular)
-        if (materialParams.debugMode == 1) {
-            postProcess.color = vec4(blurredDiffuse * centerAlbedo, 1.0);
-            return;
-        }
+        postProcess.color = recombine(blurredDiffuse, c);
+    }
 
-        // Final: blurred diffuse * albedo + specular
-        vec3 finalDiffuse = blurredDiffuse * centerAlbedo;
-        postProcess.color = vec4(finalDiffuse + centerSpecular, centerColor.a);
+    void postProcess(inout PostProcessInputs postProcess) {
+        if (materialParams.discSampling != 0) {
+            discBlur(postProcess);
+        } else {
+            separableBlur(postProcess);
+        }
     }
 }

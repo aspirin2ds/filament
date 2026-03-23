@@ -101,110 +101,28 @@ struct BurleyPreset {
     float3 meanFreePathColor;
     float meanFreePathDistance;
     float worldUnitScale;
-    float3 tint;
-    float3 boundaryColorBleed;
-    float extinctionScale;
-    float normalScale;
-    float scatteringDistribution;
-    float ior;
     float roughness0;
     float roughness1;
     float lobeMix;
-    float3 transmissionTintColor;
 };
 
-constexpr std::array<BurleyPreset, 4> PRESETS = {{
-    {
-        "Unreal Burley Reference",
-        "unreal_burley_reference",
-        { 0.21875f, 0.178259f, 0.13434f },
-        0.5f,
-        0.0f,
-        0.5f,
-        0.5f,
-        { 1.0f, 0.530583f, 0.526042f },
-        0.15f,
-        1.0f,
-        { 1.0f, 1.0f, 1.0f },
-        { 1.0f, 1.0f, 1.0f },
-        1.0f,
-        0.08f,
-        0.93f,
-        1.55f,
-        0.75f,
-        1.3f,
-        0.85f,
-        { 1.0f, 1.0f, 1.0f }
-    },
-    {
-        "Skin",
-        "skin",
-        { 0.8f, 0.5f, 0.4f },
-        0.5f,
-        0.0f,
-        0.5f,
-        0.5f,
-        { 0.8f, 0.2f, 0.1f },
-        0.08f,
-        0.1f,
-        { 1.0f, 1.0f, 1.0f },
-        { 1.0f, 1.0f, 1.0f },
-        1.0f,
-        0.08f,
-        0.93f,
-        1.4f,
-        0.75f,
-        1.2f,
-        0.85f,
-        { 1.0f, 1.0f, 1.0f }
-    },
-    {
-        "Marble",
-        "marble",
-        { 0.9f, 0.9f, 0.85f },
-        0.3f,
-        0.0f,
-        0.5f,
-        0.7f,
-        { 0.9f, 0.85f, 0.7f },
-        0.5f,
-        1.0f,
-        { 1.0f, 1.0f, 1.0f },
-        { 1.0f, 1.0f, 1.0f },
-        1.0f,
-        0.08f,
-        0.93f,
-        1.0f,
-        0.75f,
-        1.2f,
-        0.85f,
-        { 1.0f, 1.0f, 1.0f }
-    },
-    {
-        "Wax",
-        "wax",
-        { 0.9f, 0.8f, 0.6f },
-        0.6f,
-        0.0f,
-        0.5f,
-        0.3f,
-        { 0.9f, 0.6f, 0.3f },
-        0.2f,
-        0.1f,
-        { 1.0f, 1.0f, 1.0f },
-        { 1.0f, 1.0f, 1.0f },
-        1.0f,
-        0.08f,
-        0.93f,
-        1.4f,
-        0.75f,
-        1.2f,
-        0.85f,
-        { 1.0f, 1.0f, 1.0f }
-    }
-}};
-
-constexpr int DEFAULT_PRESET_INDEX = 2;
+// All distance values in centimeters (cm).
+// worldUnitScale = cm per scene unit (Suzanne ~2 units wide ≈ 20cm, so 1 unit ≈ 10cm).
+constexpr BurleyPreset DEFAULT_PRESET = {
+    "Default",
+    "default",
+    { 1.0f, 1.0f, 1.0f },         // baseColor — pure white for debugging
+    0.5f,                           // roughness
+    0.0f,                           // metallic
+    0.5f,                           // reflectance
+    0.5f,                           // thickness
+    { 1.0f, 0.530583f, 0.526042f }, // meanFreePathColor (UE reference)
+    1.2f,                           // meanFreePathDistance (cm)
+    10.0f,                          // worldUnitScale (cm/scene-unit)
+    0.75f,                          // roughness0
+    1.3f,                           // roughness1
+    0.85f                           // lobeMix
+};
 
 struct ComparisonViewpoint {
     const char* name;
@@ -387,33 +305,25 @@ struct App {
     mat4f transform;
     mat4f baseMeshTransform;
 
-    float3 baseColor = { 0.8f, 0.5f, 0.4f };
+    float3 baseColor = { 1.0f, 1.0f, 1.0f };
     float roughness = 0.5f;
     float metallic = 0.0f;
     float reflectance = 0.5f;
     float thickness = 0.5f;
-    float scatteringDistance = 0.15f;
+    float scatteringDistance = 1.2f;   // cm
     float3 subsurfaceColor = { 0.8f, 0.2f, 0.1f };
 
     float3 meanFreePathColor = { 1.0f, 0.530583f, 0.526042f };
-    float meanFreePathDistance = 0.15f;
-    float worldUnitScale = 1.0f;
-    float3 tint = { 1.0f, 1.0f, 1.0f };
-    float3 boundaryColorBleed = { 1.0f, 1.0f, 1.0f };
-    float extinctionScale = 1.0f;
-    float normalScale = 0.08f;
-    float scatteringDistribution = 0.93f;
-    float ior = 1.55f;
+    float meanFreePathDistance = 1.2f;  // cm
+    float worldUnitScale = 10.0f;      // cm per scene unit
+    float3 falloffColor = { 1.0f, 0.37f, 0.3f };  // UE default skin FalloffColor
     float roughness0 = 0.75f;
     float roughness1 = 1.3f;
     float lobeMix = 0.85f;
-    float3 transmissionTintColor = { 1.0f, 1.0f, 1.0f };
-    float transmissionMFPScaleFactor = 100.0f;
-
     bool sssEnabled = true;
     int sssSampleCount = 11;
-    bool adaptiveSampleCount = false;
-    int minSampleCount = 5;
+    bool discSampling = false;
+    int discSampleCount = 64;
     DebugView debugView = DebugView::FINAL;
 
     bool screenshotRequested = false;
@@ -425,7 +335,6 @@ struct App {
     std::string comparisonOutputDir;
     std::string gitCommit;
 
-    int presetIndex = DEFAULT_PRESET_INDEX;
     int viewpointIndex = 0;
     int restoreViewpointIndex = 0;
     DebugView restoreDebugView = DebugView::FINAL;
@@ -540,17 +449,10 @@ void applyPreset(App& app, BurleyPreset const& preset) {
     app.meanFreePathDistance = preset.meanFreePathDistance;
     app.worldUnitScale = preset.worldUnitScale;
     app.subsurfaceColor = preset.meanFreePathColor;
-    app.scatteringDistance = preset.meanFreePathDistance * preset.worldUnitScale;
-    app.tint = preset.tint;
-    app.boundaryColorBleed = preset.boundaryColorBleed;
-    app.extinctionScale = preset.extinctionScale;
-    app.normalScale = preset.normalScale;
-    app.scatteringDistribution = preset.scatteringDistribution;
-    app.ior = preset.ior;
+    app.scatteringDistance = preset.meanFreePathDistance;  // cm
     app.roughness0 = preset.roughness0;
     app.roughness1 = preset.roughness1;
     app.lobeMix = preset.lobeMix;
-    app.transmissionTintColor = preset.transmissionTintColor;
 }
 
 void writeComparisonMetadata(App const& app, View const* view) {
@@ -558,7 +460,7 @@ void writeComparisonMetadata(App const& app, View const* view) {
 
     Camera const& camera = view->getCamera();
     Viewport const viewport = view->getViewport();
-    auto const& preset = PRESETS[app.presetIndex];
+    auto const& preset = DEFAULT_PRESET;
     auto const& viewpoint = COMPARISON_VIEWPOINTS[size_t(app.viewpointIndex)];
 
     std::ofstream out(app.comparisonOutputDir + "/metadata.json", std::ios::trunc);
@@ -586,18 +488,9 @@ void writeComparisonMetadata(App const& app, View const* view) {
     out << "  \"worldUnitScale\": " << app.worldUnitScale << ",\n";
     out << "  \"viewScatteringDistanceMultiplier\": 1.0,\n";
     out << "  \"viewSubsurfaceColorMultiplier\": " << vectorToJson(float3{1.0f, 1.0f, 1.0f}) << ",\n";
-    out << "  \"tint\": " << vectorToJson(app.tint) << ",\n";
-    out << "  \"boundaryColorBleed\": " << vectorToJson(app.boundaryColorBleed) << ",\n";
-    out << "  \"extinctionScale\": " << app.extinctionScale << ",\n";
-    out << "  \"normalScale\": " << app.normalScale << ",\n";
-    out << "  \"scatteringDistribution\": " << app.scatteringDistribution << ",\n";
-    out << "  \"ior\": " << app.ior << ",\n";
     out << "  \"roughness0\": " << app.roughness0 << ",\n";
     out << "  \"roughness1\": " << app.roughness1 << ",\n";
-    out << "  \"lobeMix\": " << app.lobeMix << ",\n";
-    out << "  \"transmissionTintColor\": " << vectorToJson(app.transmissionTintColor) << ",\n";
-    out << "  \"transmissionMFPScaleFactor\": " << app.transmissionMFPScaleFactor << ",\n";
-    out << "  \"burleyTransmissionProfile\": true\n";
+    out << "  \"lobeMix\": " << app.lobeMix << "\n";
     out << "}\n";
 }
 
@@ -607,7 +500,7 @@ void writeComparisonReport(App const& app) {
     out << "This capture set is the Filament side of the repeatable Unreal-vs-Filament Burley "
            "comparison workflow.\n\n";
     out << "- Engine commit: `" << app.gitCommit << "`\n";
-    out << "- Preset: `" << PRESETS[app.presetIndex].name << "`\n";
+    out << "- Preset: `" << DEFAULT_PRESET.name << "`\n";
     out << "- Metadata: [`metadata.json`](./metadata.json)\n";
     out << "- Baseline render settings: direct light only, fixed viewpoints, TAA disabled, bloom "
            "disabled, DOF disabled, SSR disabled\n\n";
@@ -615,7 +508,7 @@ void writeComparisonReport(App const& app) {
     out << "## Parameter Mapping\n\n";
     out << "| Unreal Burley term | Filament current mapping | Status |\n";
     out << "| --- | --- | --- |\n";
-    out << "| Surface Albedo | stored in `sssAlbedo` for lighting-space recombine | Implemented |\n";
+    out << "| Falloff Color | derives SurfaceAlbedo + DMFP ratios (UE coupled mapping) | Implemented |\n";
     out << "| Mean Free Path Color | material `subsurfaceColor` authored per pixel | Approximate |\n";
     out << "| Mean Free Path Distance | material `scatteringDistance` authored per pixel | Approximate |\n";
     out << "| World Unit Scale | view-level Burley radius calibration | Implemented |\n";
@@ -682,18 +575,12 @@ void applyViewOptions(App& app) {
     SubsurfaceScatteringOptions sssOptions;
     sssOptions.enabled = app.sssEnabled;
     sssOptions.sampleCount = uint8_t(app.sssSampleCount);
-    sssOptions.adaptiveSampleCount = app.adaptiveSampleCount;
-    sssOptions.minSampleCount = uint8_t(app.minSampleCount);
+    sssOptions.discSampling = app.discSampling;
+    sssOptions.discSampleCount = uint8_t(app.discSampleCount);
     sssOptions.scatteringDistance = 1.0f;
     sssOptions.subsurfaceColor = float3{ 1.0f, 1.0f, 1.0f };
     sssOptions.worldUnitScale = app.worldUnitScale;
-    sssOptions.ior = app.ior;
-    sssOptions.extinctionScale = app.extinctionScale;
-    sssOptions.normalScale = app.normalScale;
-    sssOptions.scatteringDistribution = app.scatteringDistribution;
-    sssOptions.transmissionTintColor = app.transmissionTintColor;
-    sssOptions.transmissionMFPScaleFactor = app.transmissionMFPScaleFactor;
-    sssOptions.boundaryColorBleed = app.boundaryColorBleed;
+    sssOptions.falloffColor = app.falloffColor;
     sssOptions.debugMode = toSssDebugMode(app.debugView);
     app.mainView->setSubsurfaceScatteringOptions(sssOptions);
 }
@@ -766,7 +653,7 @@ void beginComparisonCapture(App& app) {
 
     app.sssEnabled = true;
     app.iblIntensity = 0.0f;
-    app.comparisonOutputDir = "captures/sss_burley/" + std::string(PRESETS[app.presetIndex].slug);
+    app.comparisonOutputDir = "captures/sss_burley/" + std::string(DEFAULT_PRESET.slug);
     std::filesystem::create_directories(app.comparisonOutputDir);
 
     queueComparisonCapture(app);
@@ -845,7 +732,7 @@ int main(int argc, char** argv) {
     app.config.iblDirectory = FilamentApp::getRootAssetsPath() + IBL_FOLDER;
     app.gitCommit = getGitCommit();
     handleCommandLineArguments(argc, argv, &app);
-    applyPreset(app, PRESETS[app.presetIndex]);
+    applyPreset(app, DEFAULT_PRESET);
 
     auto setup = [&app](Engine* engine, View* view, Scene* scene) {
         app.mainView = view;
@@ -920,13 +807,9 @@ int main(int argc, char** argv) {
         ImGui::Begin("SSS Burley Parameters");
 
         if (ImGui::CollapsingHeader("Canonical Comparison", ImGuiTreeNodeFlags_DefaultOpen)) {
-            if (app.presetIndex != DEFAULT_PRESET_INDEX) {
-                app.presetIndex = DEFAULT_PRESET_INDEX;
+            if (ImGui::Button("Reset to Defaults")) {
+                applyPreset(app, DEFAULT_PRESET);
             }
-            if (ImGui::Button("Reset to Marble Defaults")) {
-                applyPreset(app, PRESETS[DEFAULT_PRESET_INDEX]);
-            }
-            ImGui::TextUnformatted("Default preset: Marble");
 
             if (ImGui::Button("Capture Comparison Set")) {
                 app.comparisonCaptureRequested = true;
@@ -946,57 +829,42 @@ int main(int argc, char** argv) {
 
         if (ImGui::CollapsingHeader("Subsurface Scattering", ImGuiTreeNodeFlags_DefaultOpen)) {
             ImGui::SliderFloat("Thickness", &app.thickness, 0.0f, 1.0f);
-            ImGui::SliderFloat("Mean Free Path Distance", &app.scatteringDistance, 0.0f, 1.0f,
-                    "%.4f");
-            ImGui::ColorEdit3("Mean Free Path Color", &app.subsurfaceColor.x);
-            ImGui::SliderFloat("World Unit Scale", &app.worldUnitScale, 0.1f, 4.0f, "%.3f");
-            ImGui::SliderFloat("IOR", &app.ior, 1.0f, 3.0f);
-        }
-
-        if (ImGui::CollapsingHeader("Transmission")) {
-            ImGui::SliderFloat("Transmission Extinction Scale##Transmission",
-                    &app.extinctionScale, 0.01f, 5.0f);
-            ImGui::SliderFloat("Transmission Normal Scale##Transmission",
-                    &app.normalScale, 0.0f, 1.0f);
-            ImGui::SliderFloat("Transmission Scattering Distribution##Transmission",
-                    &app.scatteringDistribution, 0.0f, 1.0f);
-            ImGui::ColorEdit3("Transmission Tint##Transmission", &app.transmissionTintColor.x);
-            ImGui::SliderFloat("Transmission MFP Scale##Transmission",
-                    &app.transmissionMFPScaleFactor, 0.1f, 500.0f, "%.1f");
+            ImGui::SliderFloat("MFP Distance (cm)", &app.scatteringDistance, 0.01f, 5.0f,
+                    "%.3f", ImGuiSliderFlags_Logarithmic);
+            ImGui::ColorEdit3("MFP Color", &app.subsurfaceColor.x);
+            ImGui::SliderFloat("World Unit Scale (cm/unit)", &app.worldUnitScale, 0.01f, 100.0f,
+                    "%.2f", ImGuiSliderFlags_Logarithmic);
+            ImGui::ColorEdit3("Falloff Color", &app.falloffColor.x);
         }
 
         if (ImGui::CollapsingHeader("Dual Specular")) {
-            ImGui::SliderFloat("Dual Spec Roughness 0##DualSpec", &app.roughness0, 0.05f, 1.5f);
-            ImGui::SliderFloat("Dual Spec Roughness 1##DualSpec", &app.roughness1, 0.05f, 2.0f);
+            ImGui::SliderFloat("Dual Spec Roughness 0##DualSpec", &app.roughness0, 0.0f, 1.0f);
+            ImGui::SliderFloat("Dual Spec Roughness 1##DualSpec", &app.roughness1, 0.0f, 2.0f);
             ImGui::SliderFloat("Dual Spec Lobe Mix##DualSpec", &app.lobeMix, 0.0f, 1.0f);
-        }
-
-        if (ImGui::CollapsingHeader("Boundary")) {
-            ImGui::ColorEdit3("Boundary Color Bleed", &app.boundaryColorBleed.x);
         }
 
         if (ImGui::CollapsingHeader("SSS Blur Pass", ImGuiTreeNodeFlags_DefaultOpen)) {
             ImGui::Checkbox("Enable SSS Blur", &app.sssEnabled);
-            ImGui::SliderInt("Sample Count", &app.sssSampleCount, 3, 25);
-            if ((app.sssSampleCount & 1) == 0) {
-                app.sssSampleCount++;
-            }
-            ImGui::Checkbox("Adaptive Sample Count", &app.adaptiveSampleCount);
-            if (app.adaptiveSampleCount) {
-                ImGui::SliderInt("Min Samples", &app.minSampleCount, 3, 25);
-                if ((app.minSampleCount & 1) == 0) {
-                    app.minSampleCount++;
+            ImGui::Checkbox("Disc Sampling", &app.discSampling);
+            if (app.discSampling) {
+                ImGui::SliderInt("Disc Samples", &app.discSampleCount, 8, 128);
+            } else {
+                ImGui::SliderInt("Sample Count", &app.sssSampleCount, 3, 25);
+                if ((app.sssSampleCount & 1) == 0) {
+                    app.sssSampleCount++;
                 }
             }
         }
 
         if (ImGui::CollapsingHeader("Light")) {
             ImGui::ColorEdit3("Light Color", &app.lightColor.x);
-            ImGui::SliderFloat("Lux", &app.lightIntensity, 0.0f, 150000.0f);
+            ImGui::SliderFloat("Lux", &app.lightIntensity, 0.0f, 150000.0f, "%.0f",
+                    ImGuiSliderFlags_Logarithmic);
             ImGui::SliderFloat("Sun Size", &app.sunAngularRadius, 0.1f, 10.0f);
             ImGuiExt::DirectionWidget("Direction", app.lightDirection.v);
             app.lightDirection = normalize(app.lightDirection);
-            ImGui::SliderFloat("IBL Intensity", &app.iblIntensity, 0.0f, 50000.0f);
+            ImGui::SliderFloat("IBL Intensity", &app.iblIntensity, 0.0f, 50000.0f, "%.0f",
+                    ImGuiSliderFlags_Logarithmic);
         }
 
         if (ImGui::CollapsingHeader("Debug Views", ImGuiTreeNodeFlags_DefaultOpen)) {

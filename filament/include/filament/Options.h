@@ -781,9 +781,13 @@ enum class SubsurfaceScatteringDebugMode : uint8_t {
 /**
  * Options for screen-space subsurface scattering (Burley normalized diffusion).
  *
- * When enabled, a separable bilateral blur is applied to the color buffer after the
- * color pass, using the Burley normalized diffusion kernel weighted by depth to prevent
- * light bleeding across depth discontinuities.
+ * All distance parameters use centimeters (cm) as the reference unit, matching
+ * Unreal Engine's convention. The worldUnitScale parameter bridges between scene
+ * units and cm.
+ *
+ * When enabled, a bilateral blur (separable or disc) is applied to the color buffer
+ * after the color pass, using the Burley normalized diffusion kernel weighted by
+ * depth to prevent light bleeding across depth discontinuities.
  */
 struct SubsurfaceScatteringOptions {
     /**
@@ -798,8 +802,9 @@ struct SubsurfaceScatteringOptions {
     uint8_t sampleCount = 11;
 
     /**
-     * World-space scattering distance. Controls how far light diffuses under the surface.
-     * Larger values produce wider, softer blur.
+     * Global mean free path distance in centimeters (cm). Acts as a multiplier on the
+     * per-pixel material scatteringDistance. Controls how far light diffuses under the
+     * surface. Typical skin: 1.0-3.0 cm.
      */
     float scatteringDistance = 1.0f;
 
@@ -811,65 +816,36 @@ struct SubsurfaceScatteringOptions {
     math::float3 subsurfaceColor = { 0.8f, 0.3f, 0.2f };
 
     /**
-     * Global world-unit scale applied to the SSS radius calibration.
+     * Conversion factor from scene world units to centimeters.
+     * Set this to match your scene's coordinate system:
+     *   - Scene in cm:     worldUnitScale = 1.0 (default)
+     *   - Scene in meters: worldUnitScale = 100.0
+     *   - Scene in mm:     worldUnitScale = 0.1
      * Values must be greater than 0.
      */
     float worldUnitScale = 1.0f;
 
     /**
-     * Index of refraction used by the SSS transmission approximation.
-     * Values must be greater than or equal to 1.0.
+     * Subsurface scattering falloff color, matching UE's per-profile "Falloff Color".
+     * This single parameter derives both the volumetric surface albedo (for the Burley
+     * scaling factor) and the per-channel DMFP ratios (how far each channel scatters).
+     * Typical skin: {1.0, 0.37, 0.3} — red scatters furthest, green/blue much less.
+     * Values are clamped to [0.05, 0.95].
      */
-    float ior = 1.5f;
+    math::float3 falloffColor = { 1.0f, 0.37f, 0.3f };
 
     /**
-     * Scales how quickly the transmission contribution is attenuated by thickness.
-     * Values must be greater than 0.
+     * Use 2D disc (importance-sampled) blur instead of separable (H+V) passes.
+     * Disc sampling produces isotropic scatter without axis bias, at the cost of
+     * requiring more samples for equivalent quality.
      */
-    float extinctionScale = 1.0f;
+    bool discSampling = false;
 
     /**
-     * Controls how strongly the shading normal affects the transmission response.
-     * Values must be between 0 and 1.
+     * Number of samples for disc sampling mode (range: 8-128).
+     * Only used when discSampling is true. Higher values reduce noise.
      */
-    float normalScale = 0.08f;
-
-    /**
-     * Controls the forward-scattering emphasis of the transmission approximation.
-     * Values must be between 0 and 1.
-     */
-    float scatteringDistribution = 0.93f;
-
-    /**
-     * Per-channel tint applied to the transmission contribution.
-     */
-    math::float3 transmissionTintColor = { 1.0f, 1.0f, 1.0f };
-
-    /**
-     * When enabled, the blur sample count scales with screen-space radius.
-     * Distant or small-radius SSS uses fewer samples for better performance.
-     */
-    bool adaptiveSampleCount = false;
-
-    /**
-     * Minimum sample count when adaptive sampling is enabled (range: 3-25).
-     */
-    uint8_t minSampleCount = 5;
-
-    /**
-     * Tint applied to blur taps that cross SSS material boundaries.
-     * When two adjacent pixels have different subsurface parameters, this tint
-     * modulates the sample contribution to prevent cross-profile color leaking.
-     * Default white {1,1,1} means no boundary suppression.
-     */
-    math::float3 boundaryColorBleed = { 1.0f, 1.0f, 1.0f };
-
-    /**
-     * Calibration factor for transmission mean free path scaling.
-     * Matches Unreal Engine's empirical correction for Burley transmission.
-     * Values must be greater than 0.
-     */
-    float transmissionMFPScaleFactor = 100.0f;
+    uint8_t discSampleCount = 64;
 
     /**
      * Optional debug visualization for the SSS setup / blur pass.

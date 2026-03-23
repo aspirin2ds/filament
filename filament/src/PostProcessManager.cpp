@@ -1237,20 +1237,34 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::subsurfaceScatteringBlur(Fra
     float const projectedScaleY = 0.5f * float(inputDesc.height) *
             std::abs(cameraInfo.projection[1][1]);
     float const cameraFar = cameraInfo.zf;
-    float const scatteringDistance = options.scatteringDistance;
-    math::float3 const subsurfaceColor = options.subsurfaceColor;
+    // Derive SurfaceAlbedo and DMFP ratios from falloffColor (UE's
+    // MapFallOffColor2SurfaceAlbedoAndDiffuseMeanFreePath).
+    auto const& fc = options.falloffColor;
+    math::float3 sssAlbedo;
+    math::float3 dmfpRaw;
+    for (int ch = 0; ch < 3; ch++) {
+        float const x = fc[ch];
+        float const x2 = x * x;
+        float const x4 = x2 * x2;
+        sssAlbedo[ch] = 0.906f * x + 0.00004f;
+        dmfpRaw[ch] = 10.39f * x4 * x - 15.18f * x4 + 8.332f * x2 * x
+                - 2.039f * x2 + 0.7279f * x - 0.0014f;
+        dmfpRaw[ch] = std::max(dmfpRaw[ch], 0.001f);
+    }
+    sssAlbedo = max(min(sssAlbedo, math::float3{0.95f}), math::float3{0.05f});
+    float const dmfpScale = std::max({dmfpRaw[0], dmfpRaw[1], dmfpRaw[2]});
+    math::float3 const dmfpRatios = dmfpRaw / dmfpScale;
+
+    // Effective parameters: fold DMFP ratios into subsurfaceColor, scale into distance
+    float const scatteringDistance = options.scatteringDistance * dmfpScale;
+    math::float3 const subsurfaceColor = options.subsurfaceColor * dmfpRatios;
     float const worldUnitScale = options.worldUnitScale;
-    float const ior = options.ior;
-    float const extinctionScale = options.extinctionScale;
-    float const normalScale = options.normalScale;
-    float const scatteringDistribution = options.scatteringDistribution;
-    math::float3 const transmissionTintColor = options.transmissionTintColor;
-    float const transmissionMFPScaleFactor = options.transmissionMFPScaleFactor;
-    math::float3 const boundaryColorBleed = options.boundaryColorBleed;
-    int32_t const sampleCount = int32_t(options.sampleCount);
-    int32_t const adaptiveSamples = options.adaptiveSampleCount ? 1 : 0;
-    int32_t const minSampleCount = int32_t(options.minSampleCount);
+    bool const discSampling = options.discSampling;
+    int32_t const separableSampleCount = int32_t(options.sampleCount);
+    int32_t const discSampleCount = int32_t(options.discSampleCount);
+    int32_t const sampleCount = discSampling ? discSampleCount : separableSampleCount;
     int32_t const debugMode = int32_t(options.debugMode);
+    math::float2 const projectedScale2D = { projectedScaleX, projectedScaleY };
 
     // Horizontal pass
     struct SSSBlurData {
@@ -1350,20 +1364,14 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::subsurfaceScatteringBlur(Fra
                     mi->setParameter("scatteringDistance", scatteringDistance);
                     mi->setParameter("subsurfaceColor", subsurfaceColor);
                     mi->setParameter("worldUnitScale", worldUnitScale);
-                    mi->setParameter("ior", ior);
-                    mi->setParameter("extinctionScale", extinctionScale);
-                    mi->setParameter("normalScale", normalScale);
-                    mi->setParameter("scatteringDistribution", scatteringDistribution);
-                    mi->setParameter("transmissionTintColor", transmissionTintColor);
-                    mi->setParameter("transmissionMFPScaleFactor", transmissionMFPScaleFactor);
-                    mi->setParameter("boundaryColorBleed", boundaryColorBleed);
                     mi->setParameter("sampleCount", sampleCount);
-                    mi->setParameter("adaptiveSamples", adaptiveSamples);
-                    mi->setParameter("minSampleCount", minSampleCount);
                     mi->setParameter("projectedScale", projectedScale);
+                    mi->setParameter("projectedScale2D", projectedScale2D);
                     mi->setParameter("cameraFar", cameraFar);
                     mi->setParameter("debugMode", passDebugMode);
                     mi->setParameter("passIndex", passIndex);
+                    mi->setParameter("discSampling", discSampling ? 1 : 0);
+                    mi->setParameter("sssAlbedo", sssAlbedo);
 
                     mi->commit(driver, getUboManager());
                     mi->use(driver);
@@ -1376,7 +1384,15 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::subsurfaceScatteringBlur(Fra
         return pass->output;
     };
 
-    // Execute horizontal then vertical blur with per-axis projected scale
+    if (discSampling) {
+        // Disc sampling: single pass, reads setupDiffuse directly, recombines in-shader
+        auto output = sssBlurPass(
+                fg, input, diffuse, diffuse, normal, params, albedo, depth,
+                { 0.0f, 0.0f }, 0.0f, 1, debugMode, "SSS Blur Disc");
+        return output;
+    }
+
+    // Separable: horizontal then vertical blur with per-axis projected scale
     auto intermediate = sssBlurPass(
             fg, input, diffuse, diffuse, normal, params, albedo, depth, { 1.0f, 0.0f }, projectedScaleX,
             0, 0, "SSS Blur H");
