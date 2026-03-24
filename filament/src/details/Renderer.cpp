@@ -1383,7 +1383,7 @@ void FRenderer::renderJob(DriverApi& driver, RootArenaScope& rootArenaScope, FVi
         input = ppm.subsurfaceScatteringBlur(
                 fg, input, colorPassOutput.sssDiffuse, colorPassOutput.sssNormal,
                 colorPassOutput.sssParams, colorPassOutput.sssAlbedo,
-                depth, cameraInfo, sssOptions, mFrameId);
+                depth, cameraInfo, sssOptions);
     }
 
     // TODO: DoF should be applied here, before TAA -- but if we do this it'll result in a lot of

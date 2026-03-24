@@ -322,7 +322,6 @@ struct App {
     float lobeMix = 0.85f;
     bool sssEnabled = true;
     int sssSampleCount = 64;
-    bool taaEnabled = true;
     DebugView debugView = DebugView::FINAL;
 
     bool screenshotRequested = false;
@@ -580,10 +579,6 @@ void applyViewOptions(App& app) {
     sssOptions.falloffColor = app.falloffColor;
     sssOptions.debugMode = toSssDebugMode(app.debugView);
     app.mainView->setSubsurfaceScatteringOptions(sssOptions);
-
-    auto taa = app.mainView->getTemporalAntiAliasingOptions();
-    taa.enabled = app.taaEnabled;
-    app.mainView->setTemporalAntiAliasingOptions(taa);
 }
 
 void applyLighting(App& app, Engine* engine) {
@@ -847,7 +842,6 @@ int main(int argc, char** argv) {
         if (ImGui::CollapsingHeader("SSS Blur Pass", ImGuiTreeNodeFlags_DefaultOpen)) {
             ImGui::Checkbox("Enable SSS Blur", &app.sssEnabled);
             ImGui::SliderInt("Sample Count", &app.sssSampleCount, 8, 128);
-            ImGui::Checkbox("Enable TAA", &app.taaEnabled);
         }
 
         if (ImGui::CollapsingHeader("Light")) {

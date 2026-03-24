@@ -15,8 +15,7 @@ material {
         { type : int, name : sampleCount },
         { type : float2, name : projectedScale2D, precision: high },
         { type : int, name : debugMode },
-        { type : float3, name : sssAlbedo, precision: medium },
-        { type : int, name : frameIndex }
+        { type : float3, name : sssAlbedo, precision: medium }
     ],
     variables : [
         vertex
@@ -110,29 +109,6 @@ fragment {
 
     float normalWeight(highp vec3 centerNormal, highp vec3 sampleNormal) {
         return sqrt(saturate(dot(centerNormal, sampleNormal) * 0.5 + 0.5));
-    }
-
-    // R2 quasi-random sequence (matches UE MonteCarlo.ush R2Sequence).
-    // Plastic constant Phi = 1.324717957244746 (real root of x^3 = x + 1).
-    // a = (1/Phi, 1/Phi^2) ≈ (0.7548776662, 0.5698402910)
-    vec2 r2Sequence(int index) {
-        const vec2 a = vec2(0.7548776662466927, 0.5698402910);
-        return fract(a * float(index));
-    }
-
-    // PCG hash for per-pixel temporal seeding (matches UE Rand3DPCG16).
-    // Takes (pixelX, pixelY, frameIndex) and returns a pseudo-random uint
-    // used to rebase the R2 sequence start per pixel per frame.
-    int pcgHash(ivec3 v) {
-        // PCG3D-16 variant: three rounds of xorshift + multiply
-        ivec3 s = v;
-        s = s * 1664525 + 1013904223;
-        s.x += s.y * s.z;
-        s.y += s.z * s.x;
-        s.z += s.x * s.y;
-        s ^= (s >> 16);
-        s.x += s.y * s.z;
-        return s.x;
     }
 
     // Shared setup: compute scattering parameters from center pixel data.
@@ -234,28 +210,21 @@ fragment {
         // Scalar center CDF for sample range remapping (UE: CalculateCenterSampleCdf)
         float centerCdfScalar = burleyCdf(centerPixelRadius, c.dominantD);
 
+        // Fibonacci golden angle for angular distribution
+        const float GOLDEN_ANGLE = 2.39996323;  // pi * (3 - sqrt(5))
         int numSamples = materialParams.sampleCount;
-
-        // Per-pixel per-frame seed via PCG hash (matches UE UpdateSeed + Rand3DPCG16).
-        // This rebases the R2 sequence so each pixel gets a different random offset
-        // each frame, allowing downstream TAA to accumulate smooth scatter gradients.
-        ivec2 pixelCoord = ivec2(uv * res.xy);
-        int seedStart = materialParams.frameIndex;
-        seedStart = pcgHash(ivec3(pixelCoord, seedStart));
 
         vec3 totalDiffuse = vec3(0.0);
         vec3 totalWeight = vec3(0.0);
 
         for (int i = 0; i < numSamples; i++) {
-            // R2 quasi-random (radius, angle) with per-pixel per-frame offset
-            vec2 random01 = r2Sequence(seedStart + i);
-
-            // Radius: remap from [0,1] to [centerCdf, 1] then invert CDF
-            float xi = centerCdfScalar + random01.x * (1.0 - centerCdfScalar);
+            // Stratified radius via CDF inverse, remapped to [centerCdf, 1]
+            float xi_raw = (float(i) + 0.5) / float(numSamples);
+            float xi = centerCdfScalar + xi_raw * (1.0 - centerCdfScalar);
             float dist_cm = burleyCdfInverse(xi, c.dominantD);  // radius in cm
 
-            // Angle: full 2π
-            float theta = random01.y * 2.0 * PI;
+            // Golden-angle Fibonacci spiral for angle
+            float theta = float(i) * GOLDEN_ANGLE;
             float cosTheta = cos(theta);
             float sinTheta = sin(theta);
 
