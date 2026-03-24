@@ -1223,7 +1223,8 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::subsurfaceScatteringBlur(Fra
         FrameGraphId<FrameGraphTexture> albedo,
         FrameGraphId<FrameGraphTexture> depth,
         const CameraInfo& cameraInfo,
-        SubsurfaceScatteringOptions const& options) noexcept {
+        SubsurfaceScatteringOptions const& options,
+        uint32_t frameId) noexcept {
 
     using namespace backend;
 
@@ -1261,6 +1262,8 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::subsurfaceScatteringBlur(Fra
     float const worldUnitScale = options.worldUnitScale;
     int32_t const sampleCount = int32_t(options.sampleCount);
     int32_t const debugMode = int32_t(options.debugMode);
+    bool const temporalNoise = options.temporalNoise;
+    bool const fastSampleNormals = options.fastSampleNormals;
     math::float2 const projectedScale2D = { projectedScaleX, projectedScaleY };
 
     // Single-pass disc blur (importance-sampled Fibonacci spiral), matching UE's AFIS approach.
@@ -1347,6 +1350,9 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::subsurfaceScatteringBlur(Fra
                 mi->setParameter("cameraFar", cameraFar);
                 mi->setParameter("debugMode", debugMode);
                 mi->setParameter("sssAlbedo", sssAlbedo);
+                mi->setParameter("frameId", int32_t(frameId));
+                mi->setParameter("temporalNoise", temporalNoise);
+                mi->setParameter("fastSampleNormals", fastSampleNormals);
 
                 mi->commit(driver, getUboManager());
                 mi->use(driver);

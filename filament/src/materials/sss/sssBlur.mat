@@ -15,7 +15,10 @@ material {
         { type : int, name : sampleCount },
         { type : float2, name : projectedScale2D, precision: high },
         { type : int, name : debugMode },
-        { type : float3, name : sssAlbedo, precision: medium }
+        { type : float3, name : sssAlbedo, precision: medium },
+        { type : int, name : frameId },
+        { type : bool, name : temporalNoise },
+        { type : bool, name : fastSampleNormals }
     ],
     variables : [
         vertex
@@ -77,6 +80,26 @@ fragment {
     float getSearchLightDiffuseScalingFactor(float surfaceAlbedo) {
         float value = surfaceAlbedo - 0.33;
         return 3.5 + 100.0 * value * value * value * value;
+    }
+
+    // PCG hash for per-pixel seeding (matches UE's approach of unique seed per pixel).
+    // Input: pixel coordinate packed as (x | y<<16), output: pseudo-random uint.
+    uint pcgHash(uint v) {
+        uint state = v * 747796405u + 2891336453u;
+        uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+        return (word >> 22u) ^ word;
+    }
+
+    // R2 quasi-random sequence (generalized golden ratio in 2D).
+    // Matches UE MonteCarlo.ush: R2Sequence(uint Index).
+    // Sequential indices produce well-distributed, spatially coherent points.
+    // Index must stay < 2^23 for float precision in fract().
+    vec2 r2Sequence(uint sampleIndex) {
+        const float ALPHA1 = 0.7548776662;  // 1 / plastic constant
+        const float ALPHA2 = 0.5698402910;  // 1 / plastic constant^2
+        return fract(vec2(
+            float(sampleIndex) * ALPHA1,
+            float(sampleIndex) * ALPHA2));
     }
 
     highp float linearizeDepth(highp float depth) {
@@ -210,21 +233,49 @@ fragment {
         // Scalar center CDF for sample range remapping (UE: CalculateCenterSampleCdf)
         float centerCdfScalar = burleyCdf(centerPixelRadius, c.dominantD);
 
-        // Fibonacci golden angle for angular distribution
-        const float GOLDEN_ANGLE = 2.39996323;  // pi * (3 - sqrt(5))
         int numSamples = materialParams.sampleCount;
+
+        // Per-pixel per-frame R2 start seed (matches UE's approach).
+        // PCG hash gives each pixel a unique R2 start index, then samples
+        // are sequential: R2Sequence(startSeed + i). This preserves spatial
+        // coherence (neighboring samples are sequential R2 points) while
+        // giving temporal decorrelation across pixels and frames for TAA.
+        // Mask to 16 bits (matches UE's Rand3DPCG16 range) to keep
+        // r2StartSeed + i within float precision for fract().
+        uint r2StartSeed = 0u;
+        if (materialParams.temporalNoise) {
+            highp ivec2 pixelCoord = ivec2(uv * res.xy);
+            r2StartSeed = pcgHash(uint(pixelCoord.x) + uint(pixelCoord.y) * 65536u
+                    + uint(materialParams.frameId) * 16777259u) & 0xFFFFu;
+        }
+
+        const float GOLDEN_ANGLE = 2.39996323;  // pi * (3 - sqrt(5))
 
         vec3 totalDiffuse = vec3(0.0);
         vec3 totalWeight = vec3(0.0);
 
+        // Debug accumulators
+        float debugMaxWeight = 0.0;
+        float debugTotalKernel = 0.0;
+
         for (int i = 0; i < numSamples; i++) {
-            // Stratified radius via CDF inverse, remapped to [centerCdf, 1]
-            float xi_raw = (float(i) + 0.5) / float(numSamples);
+            // Sample distribution: R2 quasi-random when temporal noise is on,
+            // stratified Fibonacci spiral when off.
+            float xi_raw;
+            float theta;
+            if (materialParams.temporalNoise) {
+                vec2 r2 = r2Sequence(r2StartSeed + uint(i));
+                xi_raw = r2.x;
+                theta = r2.y * 2.0 * PI;
+            } else {
+                xi_raw = (float(i) + 0.5) / float(numSamples);
+                theta = float(i) * GOLDEN_ANGLE;
+            }
+
+            // Remap radius xi to [centerCdf, 1] for CDF inverse
             float xi = centerCdfScalar + xi_raw * (1.0 - centerCdfScalar);
             float dist_cm = burleyCdfInverse(xi, c.dominantD);  // radius in cm
 
-            // Golden-angle Fibonacci spiral for angle
-            float theta = float(i) * GOLDEN_ANGLE;
             float cosTheta = cos(theta);
             float sinTheta = sin(theta);
 
@@ -240,7 +291,12 @@ fragment {
             highp float sampleDepth = -linearizeDepth(
                     textureLod(materialParams_depth, sampleUV, 0.0).r);
             float sampleMask = diffuseData.a;
-            highp vec3 sampleNormal = estimateSmoothedStoredNormal(sampleUV, res, 1.0);
+            // Fast path: single normal read (1 tex read) vs smoothed (5 tex reads).
+            // Center macro normal is always smoothed; sample normals only need to be
+            // accurate enough for bilateral rejection.
+            highp vec3 sampleNormal = materialParams.fastSampleNormals
+                    ? normalize(sampleStoredNormalData(sampleUV).xyz)
+                    : estimateSmoothedStoredNormal(sampleUV, res, 1.0);
 
             // 3D radius correction: convert depth delta from scene units to cm
             float deltaDepth_cm = (sampleDepth - c.depth) * wus;
@@ -262,12 +318,59 @@ fragment {
 
             totalDiffuse += sampleDiffuse * w;
             totalWeight += w;
+
+            // Track debug info
+            float wLum = dot(w, vec3(0.2126, 0.7152, 0.0722));
+            debugMaxWeight = max(debugMaxWeight, wLum);
+            debugTotalKernel += wLum;
         }
 
         // Normalize scatter samples, then lerp with center using CDF weight
         // (matches UE SubsurfaceBurleyNormalized.ush:989-991)
         vec3 scatteredDiffuse = totalDiffuse / max(totalWeight, vec3(1e-4));
         vec3 blurredDiffuse = mix(scatteredDiffuse, centerDiffuse, centerCdfWeight);
+
+        // Debug mode: kernel weight heatmap
+        if (materialParams.debugMode == 2) {
+            // Visualize total kernel weight as a heatmap (blue=low, green=mid, red=high)
+            float t = saturate(debugTotalKernel / max(float(numSamples) * debugMaxWeight, 1e-4));
+            vec3 heatmap = vec3(
+                smoothstep(0.5, 1.0, t),
+                1.0 - abs(t - 0.5) * 2.0,
+                smoothstep(0.5, 0.0, t));
+            postProcess.color = vec4(heatmap * c.mask, 1.0);
+            return;
+        }
+
+        // Debug mode: sample positions (shows where samples land for center pixel area)
+        if (materialParams.debugMode == 3) {
+            // Render dots at sample UV positions — bright where samples cluster
+            float sampleDensity = 0.0;
+            for (int i = 0; i < numSamples; i++) {
+                float xi_raw_dbg;
+                float theta_dbg;
+                if (materialParams.temporalNoise) {
+                    vec2 r2 = r2Sequence(r2StartSeed + uint(i));
+                    xi_raw_dbg = r2.x;
+                    theta_dbg = r2.y * 2.0 * PI;
+                } else {
+                    xi_raw_dbg = (float(i) + 0.5) / float(numSamples);
+                    theta_dbg = float(i) * GOLDEN_ANGLE;
+                }
+                float xi_dbg = centerCdfScalar + xi_raw_dbg * (1.0 - centerCdfScalar);
+                float dist_dbg = burleyCdfInverse(xi_dbg, c.dominantD);
+                vec2 offset_dbg = vec2(
+                    dist_dbg * pixelScale2D_cm.x * cos(theta_dbg),
+                    dist_dbg * pixelScale2D_cm.y * sin(theta_dbg)) * res.zw;
+                // Distance from this pixel to the sample position (in pixels)
+                float pixelDist = length(offset_dbg * res.xy);
+                sampleDensity += exp(-pixelDist * pixelDist * 0.5);
+            }
+            float viz = saturate(sampleDensity * 0.3);
+            // Yellow dots on dark background; dim non-SSS pixels
+            postProcess.color = vec4(vec3(viz, viz * 0.8, viz * 0.1) * c.mask, 1.0);
+            return;
+        }
 
         postProcess.color = recombine(blurredDiffuse, c);
     }

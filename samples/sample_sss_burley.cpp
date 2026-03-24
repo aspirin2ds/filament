@@ -17,6 +17,7 @@
 #include "common/arguments.h"
 
 #include <array>
+#include <chrono>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -82,12 +83,16 @@ constexpr float PI_F = 3.14159265358979323846f;
 enum class DebugView : int {
     FINAL = 0,
     SCATTERING,
+    KERNEL_WEIGHTS,
+    SAMPLE_POSITIONS,
     COUNT
 };
 
 constexpr std::array<const char*, size_t(DebugView::COUNT)> DEBUG_VIEW_NAMES = {{
     "Final",
-    "Scattering Only"
+    "Scattering Only",
+    "Kernel Weights",
+    "Sample Positions"
 }};
 
 struct BurleyPreset {
@@ -299,7 +304,9 @@ struct App {
     Config config;
     Entity light;
     Material* material = nullptr;
+    Material* litMaterial = nullptr;
     MaterialInstance* materialInstance = nullptr;
+    MaterialInstance* litMaterialInstance = nullptr;
     Texture* normalMap = nullptr;
     MeshReader::Mesh mesh;
     mat4f transform;
@@ -320,7 +327,8 @@ struct App {
     float roughness0 = 0.75f;
     float roughness1 = 1.3f;
     float lobeMix = 0.85f;
-    bool sssEnabled = true;
+    bool temporalNoise = false;
+    bool fastSampleNormals = true;
     int sssSampleCount = 64;
     DebugView debugView = DebugView::FINAL;
 
@@ -339,6 +347,52 @@ struct App {
     float restoreIblIntensity = 30000.0f;
 
     View* mainView = nullptr;
+
+    // Frame timing
+    float frameTimeMs = 0.0f;           // wall-clock frame-to-frame time
+    float gpuFrameTimeMs = 0.0f;        // denoised GPU duration from Renderer
+    std::chrono::steady_clock::time_point lastFrameTime = std::chrono::steady_clock::now();
+
+    // SSS profiler — multi-axis benchmark
+    enum class BenchState { IDLE, WARMUP, MEASURE, NEXT, DONE };
+    BenchState benchState = BenchState::IDLE;
+    int benchFramesLeft = 0;
+    int benchSavedSampleCount = 64;
+    bool benchSavedFastNormals = true;
+    bool benchSavedTemporalNoise = false;
+
+    static constexpr int BENCH_WARMUP_FRAMES = 10;
+    static constexpr int BENCH_MEASURE_FRAMES = 30;
+
+    // Each config: {sampleCount, fastNormals, temporalNoise, label}
+    struct BenchConfig {
+        int sampleCount;  // 0 = SSS blur off, -1 = standard lit material
+        bool fastNormals;
+        bool temporalNoise;
+        const char* label;
+    };
+    static constexpr int BENCH_CONFIGS = 10;
+    static constexpr BenchConfig BENCH_CONFIG_LIST[BENCH_CONFIGS] = {
+        { -1, true,  false, "Standard Lit"       },
+        {  0, true,  false, "SSS mat, blur OFF"  },
+        {  8, true,  false, " 8  fast  det"      },
+        { 16, true,  false, "16  fast  det"      },
+        { 32, true,  false, "32  fast  det"      },
+        { 64, true,  false, "64  fast  det"      },
+        {128, true,  false, "128 fast  det"      },
+        { 64, false, false, "64  smooth det"     },
+        { 64, true,  true,  "64  fast  R2"       },
+        { 64, false, true,  "64  smooth R2"      },
+    };
+    int benchStepIndex = 0;
+    float benchAccum = 0.0f;
+    int benchCount = 0;
+    float benchResults[BENCH_CONFIGS] = {};
+
+    // Running frame time history for sparkline
+    static constexpr int FRAME_HISTORY_SIZE = 120;
+    float frameHistory[FRAME_HISTORY_SIZE] = {};
+    int frameHistoryIdx = 0;
 
     float lightIntensity = 110000.0f;
     float3 lightDirection = { 0.7f, -1.0f, -0.8f };
@@ -432,6 +486,10 @@ SubsurfaceScatteringDebugMode toSssDebugMode(DebugView view) {
     switch (view) {
         case DebugView::SCATTERING:
             return SubsurfaceScatteringDebugMode::SCATTERING;
+        case DebugView::KERNEL_WEIGHTS:
+            return SubsurfaceScatteringDebugMode::KERNEL_WEIGHTS;
+        case DebugView::SAMPLE_POSITIONS:
+            return SubsurfaceScatteringDebugMode::SAMPLE_POSITIONS;
         default:
             return SubsurfaceScatteringDebugMode::NONE;
     }
@@ -571,12 +629,17 @@ void applyViewOptions(App& app) {
     }
 
     SubsurfaceScatteringOptions sssOptions;
-    sssOptions.enabled = app.sssEnabled;
-    sssOptions.sampleCount = uint8_t(app.sssSampleCount);
+    // sampleCount<=0 is used by benchmark:
+    //   0  = SSS material but blur disabled
+    //  -1  = standard lit material (blur disabled)
+    sssOptions.enabled = app.sssSampleCount > 0;
+    sssOptions.sampleCount = uint8_t(std::max(app.sssSampleCount, 8));
     sssOptions.scatteringDistance = 1.0f;
     sssOptions.subsurfaceColor = float3{ 1.0f, 1.0f, 1.0f };
     sssOptions.worldUnitScale = app.worldUnitScale;
     sssOptions.falloffColor = app.falloffColor;
+    sssOptions.temporalNoise = app.temporalNoise;
+    sssOptions.fastSampleNormals = app.fastSampleNormals;
     sssOptions.debugMode = toSssDebugMode(app.debugView);
     app.mainView->setSubsurfaceScatteringOptions(sssOptions);
 }
@@ -605,6 +668,19 @@ void syncSceneState(App& app, Engine* engine) {
     applyMaterialDebugView(app);
     applyViewOptions(app);
     applyLighting(app, engine);
+
+    // Swap material for benchmark standard lit baseline
+    if (engine && app.mesh.renderable) {
+        auto& rcm = engine->getRenderableManager();
+        auto ri = rcm.getInstance(app.mesh.renderable);
+        if (ri) {
+            if (app.sssSampleCount == -1 && app.litMaterialInstance) {
+                rcm.setMaterialInstanceAt(ri, 0, app.litMaterialInstance);
+            } else {
+                rcm.setMaterialInstanceAt(ri, 0, app.materialInstance);
+            }
+        }
+    }
 
     auto& tcm = engine->getTransformManager();
     auto ti = tcm.getInstance(app.mesh.renderable);
@@ -647,7 +723,7 @@ void beginComparisonCapture(App& app) {
     app.restoreViewpointIndex = app.viewpointIndex;
     app.restoreIblIntensity = app.iblIntensity;
 
-    app.sssEnabled = true;
+    // SSS is always enabled
     app.iblIntensity = 0.0f;
     app.comparisonOutputDir = "captures/sss_burley/" + std::string(DEFAULT_PRESET.slug);
     std::filesystem::create_directories(app.comparisonOutputDir);
@@ -743,6 +819,10 @@ int main(int argc, char** argv) {
         app.material = Material::Builder()
             .package(RESOURCES_SANDBOXSUBSURFACEBURLEY_DATA, RESOURCES_SANDBOXSUBSURFACEBURLEY_SIZE)
             .build(*engine);
+        app.litMaterial = Material::Builder()
+            .package(RESOURCES_SANDBOXLIT_DATA, RESOURCES_SANDBOXLIT_SIZE)
+            .build(*engine);
+        app.litMaterialInstance = app.litMaterial->createInstance();
 
         auto* mi = app.materialInstance = app.material->createInstance();
         app.normalMap = loadNormalMap(engine, MONKEY_NORMAL_DATA, MONKEY_NORMAL_SIZE);
@@ -779,6 +859,8 @@ int main(int argc, char** argv) {
         engine->destroy(app.mesh.renderable);
         engine->destroy(app.materialInstance);
         engine->destroy(app.material);
+        engine->destroy(app.litMaterialInstance);
+        engine->destroy(app.litMaterial);
     };
 
     FilamentApp::get().animate([&app](Engine* engine, View*, double) {
@@ -840,7 +922,20 @@ int main(int argc, char** argv) {
         }
 
         if (ImGui::CollapsingHeader("SSS Blur Pass", ImGuiTreeNodeFlags_DefaultOpen)) {
-            ImGui::Checkbox("Enable SSS Blur", &app.sssEnabled);
+            ImGui::Checkbox("Temporal Noise (R2)", &app.temporalNoise);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                        "R2 quasi-random per-pixel per-frame jitter.\n"
+                        "ON: unique sample pattern per pixel, changes each frame (needs TAA).\n"
+                        "OFF: deterministic Fibonacci spiral, same pattern every frame.");
+            }
+            ImGui::Checkbox("Fast Sample Normals", &app.fastSampleNormals);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                        "ON: 1-tap normal per sample (4 reads/sample).\n"
+                        "OFF: 5-tap smoothed normal per sample (8 reads/sample).\n"
+                        "Center pixel always uses smoothed normal.");
+            }
             ImGui::SliderInt("Sample Count", &app.sssSampleCount, 8, 128);
         }
 
@@ -863,6 +958,167 @@ int main(int argc, char** argv) {
             app.debugView = DebugView(debugMode);
         }
 
+        if (ImGui::CollapsingHeader("SSS Profiler", ImGuiTreeNodeFlags_DefaultOpen)) {
+            // FPS display
+            float fps = app.frameTimeMs > 0.0f ? 1000.0f / app.frameTimeMs : 0.0f;
+            ImGui::Text("%.1f FPS  %.2f ms  (GPU: %.2f ms)", fps,
+                    app.frameTimeMs, app.gpuFrameTimeMs);
+
+            // Viewport info
+            uint32_t vpW = 0, vpH = 0;
+            if (app.mainView) {
+                Viewport vp = app.mainView->getViewport();
+                vpW = vp.width;
+                vpH = vp.height;
+            }
+
+            // Per-pixel cost breakdown
+            // Center: color + setupDiffuse + params + albedo + depth + smoothedNormal(5) = 10
+            // Per sample: setupDiffuse + depth + albedo + normal(1 or 5) = 4 or 8
+            int readsCenter = 10;
+            int readsPerSample = app.fastSampleNormals ? 4 : 8;
+            int totalReadsPerPixel = readsCenter + app.sssSampleCount * readsPerSample;
+            float megaReads = float(vpW) * float(vpH) * float(totalReadsPerPixel) / 1e6f;
+
+            ImGui::Text("Resolution: %u x %u", vpW, vpH);
+            ImGui::Text("Samples: %d  |  Reads/sample: %d  |  Reads/px: %d  |  Total: %.0fM",
+                    app.sssSampleCount, readsPerSample, totalReadsPerPixel, megaReads);
+
+            // Frame time sparkline
+            ImGui::PlotLines("##frametime", app.frameHistory, App::FRAME_HISTORY_SIZE,
+                    app.frameHistoryIdx, nullptr, 0.0f, 40.0f, ImVec2(0, 40));
+
+            ImGui::Separator();
+
+            // Multi-axis benchmark
+            bool benchRunning = app.benchState != App::BenchState::IDLE
+                    && app.benchState != App::BenchState::DONE;
+            if (benchRunning) {
+                int totalFrames = App::BENCH_CONFIGS
+                        * (App::BENCH_WARMUP_FRAMES + App::BENCH_MEASURE_FRAMES);
+                int elapsed = app.benchStepIndex
+                        * (App::BENCH_WARMUP_FRAMES + App::BENCH_MEASURE_FRAMES)
+                        + (App::BENCH_WARMUP_FRAMES + App::BENCH_MEASURE_FRAMES
+                                - app.benchFramesLeft);
+                ImGui::Text("Benchmarking: %s",
+                        App::BENCH_CONFIG_LIST[app.benchStepIndex].label);
+                ImGui::ProgressBar(float(elapsed) / float(totalFrames));
+            } else {
+                if (ImGui::Button("Run Benchmark")) {
+                    app.benchSavedSampleCount = app.sssSampleCount;
+                    app.benchSavedFastNormals = app.fastSampleNormals;
+                    app.benchSavedTemporalNoise = app.temporalNoise;
+                    app.benchStepIndex = 0;
+                    app.benchState = App::BenchState::WARMUP;
+                    app.benchFramesLeft = App::BENCH_WARMUP_FRAMES;
+                    auto const& cfg = App::BENCH_CONFIG_LIST[0];
+                    app.sssSampleCount = cfg.sampleCount;
+                    app.fastSampleNormals = cfg.fastNormals;
+                    app.temporalNoise = cfg.temporalNoise;
+                    for (int i = 0; i < App::BENCH_CONFIGS; i++) {
+                        app.benchResults[i] = 0.0f;
+                    }
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                            "Sweeps sample counts, normal quality, and temporal noise.\n"
+                            "%d configs x (%d warmup + %d measure) frames.",
+                            App::BENCH_CONFIGS, App::BENCH_WARMUP_FRAMES,
+                            App::BENCH_MEASURE_FRAMES);
+                }
+            }
+
+            // Results table
+            bool hasResults = false;
+            for (int i = 0; i < App::BENCH_CONFIGS; i++) {
+                if (app.benchResults[i] > 0.0f) { hasResults = true; break; }
+            }
+            if (hasResults) {
+                ImGui::Separator();
+                ImGui::Columns(4, "benchcols", false);
+                ImGui::SetColumnWidth(0, 130);
+                ImGui::SetColumnWidth(1, 80);
+                ImGui::SetColumnWidth(2, 55);
+                ImGui::SetColumnWidth(3, 80);
+                ImGui::Text("Config"); ImGui::NextColumn();
+                ImGui::Text("ms"); ImGui::NextColumn();
+                ImGui::Text("FPS"); ImGui::NextColumn();
+                ImGui::Text("vs best"); ImGui::NextColumn();
+                ImGui::Separator();
+
+                float bestMs = 1e9f;
+                for (int i = 0; i < App::BENCH_CONFIGS; i++) {
+                    if (app.benchResults[i] > 0.0f && app.benchResults[i] < bestMs) {
+                        bestMs = app.benchResults[i];
+                    }
+                }
+
+                for (int i = 0; i < App::BENCH_CONFIGS; i++) {
+                    if (app.benchResults[i] <= 0.0f) continue;
+                    auto const& cfg = App::BENCH_CONFIG_LIST[i];
+                    float ms = app.benchResults[i];
+                    float delta = ms - bestMs;
+
+                    bool isCurrent = cfg.sampleCount == app.sssSampleCount
+                            && cfg.fastNormals == app.fastSampleNormals
+                            && cfg.temporalNoise == app.temporalNoise;
+                    if (isCurrent) ImGui::PushStyleColor(ImGuiCol_Text,
+                            ImVec4(1.0f, 0.8f, 0.2f, 1.0f));
+
+                    ImGui::Text("%s", cfg.label); ImGui::NextColumn();
+                    ImGui::Text("%.2f", ms); ImGui::NextColumn();
+                    ImGui::Text("%.0f", 1000.0f / ms); ImGui::NextColumn();
+                    if (delta < 0.05f) {
+                        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "best");
+                    } else {
+                        ImGui::Text("+%.2f", delta);
+                    }
+                    ImGui::NextColumn();
+                    if (isCurrent) ImGui::PopStyleColor();
+                }
+                ImGui::Columns(1);
+
+                // Cost analysis
+                // 0=StdLit 1=SSSoff 2=8f 3=16f 4=32f 5=64f 6=128f 7=64s 8=64fR2 9=64sR2
+                float litBase = app.benchResults[0];
+                float sssBase = app.benchResults[1];
+                if (litBase > 0.0f && sssBase > 0.0f) {
+                    ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f),
+                            "SSS MRT overhead: %.2f ms (%.1f%%)",
+                            sssBase - litBase,
+                            100.0f * (sssBase - litBase) / litBase);
+                }
+                if (sssBase > 0.0f && app.benchResults[5] > 0.0f) {
+                    ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f),
+                            "Blur pass @64: %.2f ms",
+                            app.benchResults[5] - sssBase);
+                }
+                if (litBase > 0.0f && app.benchResults[5] > 0.0f) {
+                    float total = app.benchResults[5] - litBase;
+                    ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f),
+                            "Total SSS @64: %.2f ms (%.1f%%)",
+                            total,
+                            100.0f * total / app.benchResults[5]);
+                }
+                if (app.benchResults[2] > 0.0f && app.benchResults[6] > 0.0f) {
+                    float perSample = (app.benchResults[6] - app.benchResults[2])
+                            / float(128 - 8);
+                    ImGui::TextColored(ImVec4(0.6f, 0.9f, 1.0f, 1.0f),
+                            "~%.3f ms/sample (fast)", perSample);
+                }
+                if (app.benchResults[5] > 0.0f && app.benchResults[7] > 0.0f) {
+                    ImGui::TextColored(ImVec4(0.6f, 0.9f, 1.0f, 1.0f),
+                            "Smooth normals @64: +%.2f ms",
+                            app.benchResults[7] - app.benchResults[5]);
+                }
+                if (app.benchResults[5] > 0.0f && app.benchResults[8] > 0.0f) {
+                    ImGui::TextColored(ImVec4(0.6f, 0.9f, 1.0f, 1.0f),
+                            "Temporal noise @64: +%.2f ms",
+                            app.benchResults[8] - app.benchResults[5]);
+                }
+            }
+        }
+
         if (ImGui::CollapsingHeader("Capture")) {
             if (ImGui::Button("Take Screenshot (PNG)")) {
                 app.screenshotRequested = true;
@@ -876,6 +1132,155 @@ int main(int argc, char** argv) {
     };
 
     auto postRender = [&app](Engine*, View* view, Scene*, Renderer* renderer) {
+        // Wall-clock frame-to-frame time
+        auto now = std::chrono::steady_clock::now();
+        float dt = std::chrono::duration<float, std::milli>(now - app.lastFrameTime).count();
+        app.lastFrameTime = now;
+        // Exponential moving average to smooth jitter (alpha ~0.05 → ~20 frame window)
+        app.frameTimeMs = app.frameTimeMs > 0.0f
+                ? app.frameTimeMs * 0.95f + dt * 0.05f
+                : dt;
+
+        // GPU frame time from Filament's Renderer (denoised hardware timer query)
+        auto history = renderer->getFrameInfoHistory(1);
+        if (!history.empty()) {
+            auto const& info = history[0];
+            if (info.denoisedGpuFrameDuration != Renderer::FrameInfo::INVALID &&
+                    info.denoisedGpuFrameDuration != Renderer::FrameInfo::PENDING) {
+                app.gpuFrameTimeMs = float(info.denoisedGpuFrameDuration) / 1e6f;
+            }
+        }
+
+        // Multi-axis benchmark state machine
+        if (app.benchState != App::BenchState::IDLE
+                && app.benchState != App::BenchState::DONE) {
+            app.benchFramesLeft--;
+            switch (app.benchState) {
+                case App::BenchState::WARMUP:
+                    if (app.benchFramesLeft <= 0) {
+                        app.benchState = App::BenchState::MEASURE;
+                        app.benchFramesLeft = App::BENCH_MEASURE_FRAMES;
+                        app.benchAccum = 0.0f;
+                        app.benchCount = 0;
+                    }
+                    break;
+                case App::BenchState::MEASURE:
+                    app.benchAccum += dt;
+                    app.benchCount++;
+                    if (app.benchFramesLeft <= 0) {
+                        app.benchResults[app.benchStepIndex] =
+                                app.benchAccum / float(app.benchCount);
+                        app.benchState = App::BenchState::NEXT;
+                    }
+                    break;
+                case App::BenchState::NEXT:
+                    app.benchStepIndex++;
+                    if (app.benchStepIndex < App::BENCH_CONFIGS) {
+                        auto const& cfg = App::BENCH_CONFIG_LIST[app.benchStepIndex];
+                        app.sssSampleCount = cfg.sampleCount;
+                        app.fastSampleNormals = cfg.fastNormals;
+                        app.temporalNoise = cfg.temporalNoise;
+                        app.benchState = App::BenchState::WARMUP;
+                        app.benchFramesLeft = App::BENCH_WARMUP_FRAMES;
+                    } else {
+                        // Restore saved settings
+                        app.sssSampleCount = app.benchSavedSampleCount;
+                        app.fastSampleNormals = app.benchSavedFastNormals;
+                        app.temporalNoise = app.benchSavedTemporalNoise;
+                        app.benchState = App::BenchState::DONE;
+
+                        // Save results to file
+                        uint32_t vpW = 0, vpH = 0;
+                        if (app.mainView) {
+                            Viewport vp = app.mainView->getViewport();
+                            vpW = vp.width;
+                            vpH = vp.height;
+                        }
+                        std::ofstream out("sss_benchmark.txt", std::ios::trunc);
+                        out << "SSS Blur Benchmark Results\n";
+                        out << "==========================\n";
+                        out << "Resolution: " << vpW << " x " << vpH << "\n";
+                        out << "Warmup: " << App::BENCH_WARMUP_FRAMES
+                            << " frames, Measure: " << App::BENCH_MEASURE_FRAMES
+                            << " frames\n\n";
+                        out << std::left << std::setw(22) << "Config"
+                            << std::right << std::setw(10) << "ms"
+                            << std::setw(10) << "FPS" << "\n";
+                        out << std::string(42, '-') << "\n";
+                        float baseline = app.benchResults[0];
+                        for (int i = 0; i < App::BENCH_CONFIGS; i++) {
+                            if (app.benchResults[i] <= 0.0f) continue;
+                            auto const& cfg = App::BENCH_CONFIG_LIST[i];
+                            float ms = app.benchResults[i];
+                            out << std::left << std::setw(22) << cfg.label
+                                << std::right << std::fixed << std::setprecision(2)
+                                << std::setw(10) << ms
+                                << std::setw(10) << (1000.0f / ms) << "\n";
+                        }
+                        // 0=StdLit 1=SSSoff 2=8f 3=16f 4=32f 5=64f 6=128f
+                        // 7=64s 8=64fR2 9=64sR2
+                        out << "\nCost Analysis\n";
+                        out << std::string(42, '-') << "\n";
+                        float litB = app.benchResults[0];
+                        float sssB = app.benchResults[1];
+                        if (litB > 0.0f && sssB > 0.0f) {
+                            out << "SSS MRT overhead:       "
+                                << std::fixed << std::setprecision(2)
+                                << (sssB - litB) << " ms ("
+                                << std::setprecision(1)
+                                << (100.0f * (sssB - litB) / litB)
+                                << "%)\n";
+                        }
+                        if (sssB > 0.0f && app.benchResults[5] > 0.0f) {
+                            out << "Blur pass @64:          "
+                                << std::fixed << std::setprecision(2)
+                                << (app.benchResults[5] - sssB) << " ms\n";
+                        }
+                        if (litB > 0.0f && app.benchResults[5] > 0.0f) {
+                            float total = app.benchResults[5] - litB;
+                            out << "Total SSS cost @64:     "
+                                << std::fixed << std::setprecision(2)
+                                << total << " ms ("
+                                << std::setprecision(1)
+                                << (100.0f * total / app.benchResults[5])
+                                << "%)\n";
+                        }
+                        if (app.benchResults[2] > 0.0f
+                                && app.benchResults[6] > 0.0f) {
+                            float perSample = (app.benchResults[6]
+                                    - app.benchResults[2]) / float(128 - 8);
+                            out << "Per-sample cost (fast): "
+                                << std::fixed << std::setprecision(3)
+                                << perSample << " ms/sample\n";
+                        }
+                        if (app.benchResults[5] > 0.0f
+                                && app.benchResults[7] > 0.0f) {
+                            out << "Smooth normals @64:    +"
+                                << std::fixed << std::setprecision(2)
+                                << (app.benchResults[7] - app.benchResults[5])
+                                << " ms\n";
+                        }
+                        if (app.benchResults[5] > 0.0f
+                                && app.benchResults[8] > 0.0f) {
+                            out << "Temporal noise @64:    +"
+                                << std::fixed << std::setprecision(2)
+                                << (app.benchResults[8] - app.benchResults[5])
+                                << " ms\n";
+                        }
+                        out.close();
+                        std::cout << "Benchmark saved to sss_benchmark.txt"
+                                  << std::endl;
+                    }
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        // Record frame time into sparkline history
+        app.frameHistory[app.frameHistoryIdx] = dt;
+        app.frameHistoryIdx = (app.frameHistoryIdx + 1) % App::FRAME_HISTORY_SIZE;
+
         auto scheduleReadback = [&](std::string path, std::string label) {
             const Viewport& vp = view->getViewport();
             uint8_t* pixels = new uint8_t[vp.width * vp.height * 4];

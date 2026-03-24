@@ -775,7 +775,9 @@ struct StereoscopicOptions {
 
 enum class SubsurfaceScatteringDebugMode : uint8_t {
     NONE,
-    SCATTERING
+    SCATTERING,
+    KERNEL_WEIGHTS,
+    SAMPLE_POSITIONS
 };
 
 /**
@@ -835,6 +837,21 @@ struct SubsurfaceScatteringOptions {
      * Values are clamped to [0.05, 0.95].
      */
     math::float3 falloffColor = { 1.0f, 0.37f, 0.3f };
+
+    /**
+     * Enable R2 quasi-random per-pixel per-frame sample jitter. When enabled, each pixel
+     * gets a unique sample pattern that changes every frame, allowing TAA to accumulate
+     * a higher effective sample count over time. When disabled, all pixels share the same
+     * deterministic Fibonacci spiral (no temporal variation).
+     */
+    bool temporalNoise = false;
+
+    /**
+     * Use single-tap normal reads for blur samples instead of 5-tap smoothed normals.
+     * Reduces texture reads from 8 to 4 per sample with minimal quality loss —
+     * the center pixel still uses the smoothed macro normal for bilateral comparison.
+     */
+    bool fastSampleNormals = true;
 
     /**
      * Optional debug visualization for the SSS setup / blur pass.

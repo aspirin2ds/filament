@@ -135,7 +135,8 @@ public:
             FrameGraphId<FrameGraphTexture> albedo,
             FrameGraphId<FrameGraphTexture> depth,
             const CameraInfo& cameraInfo,
-            SubsurfaceScatteringOptions const& options) noexcept;
+            SubsurfaceScatteringOptions const& options,
+            uint32_t frameId) noexcept;
 
     // Gaussian mipmap
     FrameGraphId<FrameGraphTexture> generateGaussianMipmap(FrameGraph& fg,
