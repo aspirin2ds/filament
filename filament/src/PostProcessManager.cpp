@@ -1223,7 +1223,8 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::subsurfaceScatteringBlur(Fra
         FrameGraphId<FrameGraphTexture> albedo,
         FrameGraphId<FrameGraphTexture> depth,
         const CameraInfo& cameraInfo,
-        SubsurfaceScatteringOptions const& options) noexcept {
+        SubsurfaceScatteringOptions const& options,
+        uint32_t frameId) noexcept {
 
     using namespace backend;
 
@@ -1347,6 +1348,7 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::subsurfaceScatteringBlur(Fra
                 mi->setParameter("cameraFar", cameraFar);
                 mi->setParameter("debugMode", debugMode);
                 mi->setParameter("sssAlbedo", sssAlbedo);
+                mi->setParameter("frameIndex", int32_t(frameId));
 
                 mi->commit(driver, getUboManager());
                 mi->use(driver);
