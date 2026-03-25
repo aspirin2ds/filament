@@ -80,21 +80,6 @@ namespace {
 
 constexpr float PI_F = 3.14159265358979323846f;
 
-enum class DebugView : int {
-    FINAL = 0,
-    SCATTERING,
-    KERNEL_WEIGHTS,
-    SAMPLE_POSITIONS,
-    COUNT
-};
-
-constexpr std::array<const char*, size_t(DebugView::COUNT)> DEBUG_VIEW_NAMES = {{
-    "Final",
-    "Scattering Only",
-    "Kernel Weights",
-    "Sample Positions"
-}};
-
 struct BurleyPreset {
     const char* name;
     const char* slug;
@@ -144,14 +129,12 @@ constexpr std::array<ComparisonViewpoint, 4> COMPARISON_VIEWPOINTS = {{
 }};
 
 struct ComparisonArtifact {
-    DebugView debugView;
     const char* name;
     const char* slug;
 };
 
-constexpr std::array<ComparisonArtifact, 2> COMPARISON_ARTIFACTS = {{
-    { DebugView::FINAL, "Final", "final" },
-    { DebugView::SCATTERING, "Scattering Only", "scattering" }
+constexpr std::array<ComparisonArtifact, 1> COMPARISON_ARTIFACTS = {{
+    { "Final", "final" }
 }};
 
 struct GapRow {
@@ -295,7 +278,6 @@ constexpr std::array<GapRow, 16> GAP_ROWS = {{
 }};
 
 struct CaptureTask {
-    DebugView debugView;
     const char* artifactName;
     const char* artifactSlug;
 };
@@ -330,7 +312,6 @@ struct App {
     bool temporalNoise = false;
     bool fastSampleNormals = true;
     int sssSampleCount = 64;
-    DebugView debugView = DebugView::FINAL;
 
     bool screenshotRequested = false;
     bool screenshotCaptureArmed = false;
@@ -343,7 +324,6 @@ struct App {
 
     int viewpointIndex = 0;
     int restoreViewpointIndex = 0;
-    DebugView restoreDebugView = DebugView::FINAL;
     float restoreIblIntensity = 30000.0f;
 
     View* mainView = nullptr;
@@ -480,19 +460,6 @@ Texture* loadNormalMap(Engine* engine, const uint8_t* normals, size_t nbytes) {
     normalMap->setImage(*engine, 0, std::move(buffer));
     normalMap->generateMipmaps(*engine);
     return normalMap;
-}
-
-SubsurfaceScatteringDebugMode toSssDebugMode(DebugView view) {
-    switch (view) {
-        case DebugView::SCATTERING:
-            return SubsurfaceScatteringDebugMode::SCATTERING;
-        case DebugView::KERNEL_WEIGHTS:
-            return SubsurfaceScatteringDebugMode::KERNEL_WEIGHTS;
-        case DebugView::SAMPLE_POSITIONS:
-            return SubsurfaceScatteringDebugMode::SAMPLE_POSITIONS;
-        default:
-            return SubsurfaceScatteringDebugMode::NONE;
-    }
 }
 
 void applyPreset(App& app, BurleyPreset const& preset) {
@@ -640,7 +607,6 @@ void applyViewOptions(App& app) {
     sssOptions.falloffColor = app.falloffColor;
     sssOptions.temporalNoise = app.temporalNoise;
     sssOptions.fastSampleNormals = app.fastSampleNormals;
-    sssOptions.debugMode = toSssDebugMode(app.debugView);
     app.mainView->setSubsurfaceScatteringOptions(sssOptions);
 }
 
@@ -711,7 +677,6 @@ void queueComparisonCapture(App& app) {
     app.comparisonCaptureTasks.clear();
     for (auto const& artifact : COMPARISON_ARTIFACTS) {
         app.comparisonCaptureTasks.push_back({
-            artifact.debugView,
             artifact.name,
             artifact.slug
         });
@@ -719,7 +684,6 @@ void queueComparisonCapture(App& app) {
 }
 
 void beginComparisonCapture(App& app) {
-    app.restoreDebugView = app.debugView;
     app.restoreViewpointIndex = app.viewpointIndex;
     app.restoreIblIntensity = app.iblIntensity;
 
@@ -732,7 +696,6 @@ void beginComparisonCapture(App& app) {
     app.comparisonCaptureIndex = 0;
     app.comparisonCaptureActive = !app.comparisonCaptureTasks.empty();
     if (app.comparisonCaptureActive) {
-        app.debugView = app.comparisonCaptureTasks.front().debugView;
         writeComparisonMetadata(app, app.mainView);
         writeComparisonReport(app);
         std::cout << "Starting Burley comparison capture in: " << app.comparisonOutputDir
@@ -742,7 +705,6 @@ void beginComparisonCapture(App& app) {
 
 void finishComparisonCapture(App& app) {
     app.comparisonCaptureActive = false;
-    app.debugView = app.restoreDebugView;
     app.viewpointIndex = app.restoreViewpointIndex;
     app.iblIntensity = app.restoreIblIntensity;
     std::cout << "Burley comparison capture complete. Artifacts saved to: "
@@ -948,14 +910,6 @@ int main(int argc, char** argv) {
             app.lightDirection = normalize(app.lightDirection);
             ImGui::SliderFloat("IBL Intensity", &app.iblIntensity, 0.0f, 50000.0f, "%.0f",
                     ImGuiSliderFlags_Logarithmic);
-        }
-
-        if (ImGui::CollapsingHeader("Debug Views", ImGuiTreeNodeFlags_DefaultOpen)) {
-            int debugMode = int(app.debugView);
-            for (int i = 0; i < int(DebugView::COUNT); i++) {
-                ImGui::RadioButton(DEBUG_VIEW_NAMES[size_t(i)], &debugMode, i);
-            }
-            app.debugView = DebugView(debugMode);
         }
 
         if (ImGui::CollapsingHeader("SSS Profiler", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -1329,10 +1283,7 @@ int main(int argc, char** argv) {
             scheduleReadback(path, label);
 
             app.comparisonCaptureIndex++;
-            if (app.comparisonCaptureIndex < app.comparisonCaptureTasks.size()) {
-                auto const& nextTask = app.comparisonCaptureTasks[app.comparisonCaptureIndex];
-                app.debugView = nextTask.debugView;
-            } else {
+            if (app.comparisonCaptureIndex >= app.comparisonCaptureTasks.size()) {
                 finishComparisonCapture(app);
             }
         }

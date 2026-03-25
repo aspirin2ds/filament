@@ -125,17 +125,17 @@ Follows Android-derived style (see `CODE_STYLE.md`). Key rules:
 
 ## SSS Burley Normalized Pipeline (Current Work)
 
-The `burley-sss-port` branch implements screen-space Burley Normalized Diffusion (Disney SSS). See `report.md` for the full technical plan. Key touchpoints:
-- **Material system**: new `SHADINGMODEL_SUBSURFACE_BURLEY` shading model, `subsurfaceColor` + `scatteringDistance` properties in `MaterialBuilder`
-- **Post-process**: separable bilateral blur pass in `PostProcessManager.cpp` using Burley kernel weights, depth-aware
-- **View options**: `SubsurfaceScatteringOptions` carries `enabled`, `sampleCount`, `scatteringDistance`, `subsurfaceColor`
-- **Sample app**: `samples/sample_sss_burley.cpp` with ImGui controls, debug views, presets, screenshot capture
+The `burley-normalized` branch implements screen-space Burley Normalized Diffusion (Disney SSS). Key touchpoints:
+- **Material system**: `SHADINGMODEL_SUBSURFACE_BURLEY` shading model, per-material `subsurfaceColor` + `scatteringDistance` + `radiusScale` written to 4 MRT buffers (sssDiffuse, sssNormal, sssParams, sssAlbedo — all RGBA16F)
+- **Post-process**: single-pass 2D disc blur in `PostProcessManager.cpp` using importance-sampled Burley kernel, bilateral depth/normal rejection, opacity-weighted recombine
+- **View options**: `SubsurfaceScatteringOptions` carries `enabled`, `sampleCount`, `scatteringDistance`, `subsurfaceColor`, `worldUnitScale`, `falloffColor`, `temporalNoise`, `fastSampleNormals`
+- **Sample app**: `samples/sample_sss_burley.cpp` with ImGui controls, presets, gap analysis table, comparison workflow, performance benchmark
 - **ImGui caveat**: the ImGui callback receives the **UI overlay view**, not the main rendering view. Store the main view from setup and use it for rendering options.
 - Reference: Unreal Engine SSS implementation at `../UnrealEngine`
 
 ### Known Missing Features (TODO)
-1. **Per-pixel SSS masking** — blur currently applies to entire scene (sky, non-SSS objects). Needs stencil mask or MRT to restrict to SSS pixels only.
-2. **MRT diffuse/specular separation** — blur runs on composited color buffer, so specular highlights get blurred too (incorrect). Only diffuse should scatter.
-3. **Per-pixel scattering parameters** — blur uses global scatteringDistance/subsurfaceColor from view options. Multi-material scenes need per-pixel G-buffer values.
-4. **Blur-specific debug views** — missing: blur difference view, kernel visualization, pre/post-blur toggle.
-5. **Transmission** — thickness-based back-scattering deferred to later phase.
+1. **Temporal accumulation history** — R2 per-pixel jitter exists but no dedicated history buffer; relies on downstream TAA.
+2. **Boundary color bleed** — Not implemented. Color can leak at SSS/non-SSS boundaries.
+3. **Transmission** — Thickness stored in MRT but not consumed by blur. No back-scattering through thin objects.
+4. **Multi-profile support** — Kernel shape (falloffColor) is view-global; per-pixel tint/distance vary via MRT but all share one profile.
+5. **Half-res blur path** — No performance fallback for mobile / low-end.

@@ -773,13 +773,6 @@ struct StereoscopicOptions {
     bool enabled = false;
 };
 
-enum class SubsurfaceScatteringDebugMode : uint8_t {
-    NONE,
-    SCATTERING,
-    KERNEL_WEIGHTS,
-    SAMPLE_POSITIONS
-};
-
 /**
  * Options for screen-space subsurface scattering (Burley normalized diffusion).
  *
@@ -852,11 +845,6 @@ struct SubsurfaceScatteringOptions {
      * the center pixel still uses the smoothed macro normal for bilateral comparison.
      */
     bool fastSampleNormals = true;
-
-    /**
-     * Optional debug visualization for the SSS setup / blur pass.
-     */
-    SubsurfaceScatteringDebugMode debugMode = SubsurfaceScatteringDebugMode::NONE;
 };
 
 } // namespace filament

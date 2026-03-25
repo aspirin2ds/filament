@@ -1261,7 +1261,6 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::subsurfaceScatteringBlur(Fra
     math::float3 const subsurfaceColor = options.subsurfaceColor * dmfpRatios;
     float const worldUnitScale = options.worldUnitScale;
     int32_t const sampleCount = int32_t(options.sampleCount);
-    int32_t const debugMode = int32_t(options.debugMode);
     bool const temporalNoise = options.temporalNoise;
     bool const fastSampleNormals = options.fastSampleNormals;
     math::float2 const projectedScale2D = { projectedScaleX, projectedScaleY };
@@ -1348,7 +1347,6 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::subsurfaceScatteringBlur(Fra
                 mi->setParameter("sampleCount", sampleCount);
                 mi->setParameter("projectedScale2D", projectedScale2D);
                 mi->setParameter("cameraFar", cameraFar);
-                mi->setParameter("debugMode", debugMode);
                 mi->setParameter("sssAlbedo", sssAlbedo);
                 mi->setParameter("frameId", int32_t(frameId));
                 mi->setParameter("temporalNoise", temporalNoise);
