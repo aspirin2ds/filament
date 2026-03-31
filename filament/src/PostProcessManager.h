@@ -324,15 +324,11 @@ public:
             utils::StaticString outputBufferName, FrameGraphId<FrameGraphTexture> input,
             FrameGraphTexture::Descriptor outDesc) noexcept;
 
-    // VSM shadow mipmap pass
-    FrameGraphId<FrameGraphTexture> vsmMipmapPass(FrameGraph& fg,
-            FrameGraphId<FrameGraphTexture> input, uint8_t layer, size_t level,
-            math::float4 clearColor) noexcept;
-
     FrameGraphId<FrameGraphTexture> gaussianBlurPass(FrameGraph& fg,
             FrameGraphId<FrameGraphTexture> input,
             FrameGraphId<FrameGraphTexture> output,
-            bool reinhard, size_t kernelWidth, float sigma) noexcept;
+            bool reinhard, size_t kernelWidth, float sigma,
+            std::optional<backend::Viewport> scissor = {}) noexcept;
 
     FrameGraphId<FrameGraphTexture> debugShadowCascades(FrameGraph& fg,
             ShadowMapManager const& smm,
@@ -403,6 +399,8 @@ public:
 
     void bindPostProcessDescriptorSet(backend::DriverApi& driver) const noexcept;
 
+    void bindPerRenderableDescriptorSet(backend::DriverApi& driver) const noexcept;
+
     backend::PipelineState getPipelineState(FMaterial const* ma, Variant::type_t variant) const noexcept;
 
     backend::PipelineState getPipelineState(FMaterial const* ma,
@@ -437,10 +435,10 @@ public:
 
     void resetForRender();
 
-private:
-    static void unbindAllDescriptorSets(backend::DriverApi& driver) noexcept;
 
-    void bindPerRenderableDescriptorSet(backend::DriverApi& driver) const noexcept;
+    MaterialInstanceManager& getMaterialInstanceManager() noexcept {
+            return mMaterialInstanceManager;
+    }
 
     // Helper to get a MaterialInstance from a FMaterial
     // This currently just call FMaterial::getDefaultInstance().
@@ -449,12 +447,15 @@ private:
     }
 
     // Helper to get a MaterialInstance from a PostProcessMaterial.
-    FMaterialInstance* getMaterialInstance(FEngine& engine, backend::DriverApi& driver, PostProcessMaterial const& material,
-            PostProcessVariant variant = PostProcessVariant::OPAQUE) {
+    FMaterialInstance* getMaterialInstance(FEngine& engine, backend::DriverApi& driver,
+            PostProcessMaterial const& material, PostProcessVariant variant = PostProcessVariant::OPAQUE) {
         FMaterial const* ma = material.getMaterial(engine, driver, variant);
         return getMaterialInstance(ma);
     }
 
+    static void unbindAllDescriptorSets(backend::DriverApi& driver) noexcept;
+
+private:
     UboManager* getUboManager() const noexcept;
 
     backend::RenderPrimitiveHandle mFullScreenQuadRph;
