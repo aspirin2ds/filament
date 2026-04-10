@@ -98,10 +98,19 @@ struct App {
             .strength = 1.0f,
             .scale = 1.0f
     };
+    float3 baseColorTint = float3{ 1.0f, 1.0f, 1.0f };
+    float aoMin = 0.0f;
+    float aoMax = 1.0f;
+    float aoScale = 1.0f;
+    float normalScale = 1.0f;
+    float roughnessScale = 1.0f;
+    float metallic = 0.0f;
+    float reflectance = 0.5f;
     float thicknessScale = 1.25f;
-    float scatterDistance = 1.10f;
+    float thicknessBias = 0.0f;
+    float scatteringDistance = 1.10f;
     float scatterStrength = 0.85f;
-    float3 scatterTint = float3{ 1.0f, 0.53f, 0.45f };
+    float3 subsurfaceColor = float3{ 1.0f, 0.53f, 0.45f };
 } g_app;
 
 std::ifstream::pos_type getFileSize(const char* filename) {
@@ -150,10 +159,19 @@ void updateSkinParameters(View* view) {
     if (!g_app.skinMaterialInstance) {
         return;
     }
+    g_app.skinMaterialInstance->setParameter("baseColorTint", g_app.baseColorTint);
+    g_app.skinMaterialInstance->setParameter("aoMin", g_app.aoMin);
+    g_app.skinMaterialInstance->setParameter("aoMax", g_app.aoMax);
+    g_app.skinMaterialInstance->setParameter("aoScale", g_app.aoScale);
+    g_app.skinMaterialInstance->setParameter("normalScale", g_app.normalScale);
+    g_app.skinMaterialInstance->setParameter("roughnessScale", g_app.roughnessScale);
+    g_app.skinMaterialInstance->setParameter("metallic", g_app.metallic);
+    g_app.skinMaterialInstance->setParameter("reflectance", g_app.reflectance);
     g_app.skinMaterialInstance->setParameter("thicknessScale", g_app.thicknessScale);
-    g_app.skinMaterialInstance->setParameter("skinScatterDistance", g_app.scatterDistance);
+    g_app.skinMaterialInstance->setParameter("thicknessBias", g_app.thicknessBias);
+    g_app.skinMaterialInstance->setParameter("skinScatterDistance", g_app.scatteringDistance);
     g_app.skinMaterialInstance->setParameter("skinScatterStrength", g_app.scatterStrength);
-    g_app.skinMaterialInstance->setParameter("skinScatterTint", RgbType::LINEAR, g_app.scatterTint);
+    g_app.skinMaterialInstance->setParameter("skinScatterTint", RgbType::LINEAR, g_app.subsurfaceColor);
     view->setSkinSSSOptions(g_app.skinSSS);
 }
 
@@ -172,14 +190,29 @@ Material* createSkinMaterial(Engine* engine) {
             .parameter("aoMap", MaterialBuilder::SamplerType::SAMPLER_2D)
             .parameter("specularMap", MaterialBuilder::SamplerType::SAMPLER_2D)
             .parameter("thicknessMap", MaterialBuilder::SamplerType::SAMPLER_2D)
+            .parameter("baseColorTint", MaterialBuilder::UniformType::FLOAT3)
+            .parameter("aoMin", MaterialBuilder::UniformType::FLOAT)
+            .parameter("aoMax", MaterialBuilder::UniformType::FLOAT)
+            .parameter("aoScale", MaterialBuilder::UniformType::FLOAT)
+            .parameter("normalScale", MaterialBuilder::UniformType::FLOAT)
+            .parameter("roughnessScale", MaterialBuilder::UniformType::FLOAT)
+            .parameter("metallic", MaterialBuilder::UniformType::FLOAT)
+            .parameter("reflectance", MaterialBuilder::UniformType::FLOAT)
             .parameter("thicknessScale", MaterialBuilder::UniformType::FLOAT)
+            .parameter("thicknessBias", MaterialBuilder::UniformType::FLOAT)
             .parameter("skinScatterDistance", MaterialBuilder::UniformType::FLOAT)
             .parameter("skinScatterStrength", MaterialBuilder::UniformType::FLOAT)
             .parameter("skinScatterTint", MaterialBuilder::UniformType::FLOAT3)
             .material(R"SHADER(
+                float remapAo(float aoValue, float minValue, float maxValue) {
+                    float range = max(maxValue - minValue, 1.0e-4);
+                    return saturate((aoValue - minValue) / range);
+                }
+
                 void material(inout MaterialInputs material) {
                     vec2 uv = getUV0();
                     material.normal = texture(materialParams_normalMap, uv).xyz * 2.0 - 1.0;
+                    material.normal.xy *= materialParams.normalScale;
                     prepareMaterial(material);
 
                     vec4 baseColor = texture(materialParams_baseColorMap, uv);
@@ -187,14 +220,18 @@ Material* createSkinMaterial(Engine* engine) {
                     float ao = texture(materialParams_aoMap, uv).r;
                     float specular = texture(materialParams_specularMap, uv).r;
                     float thickness = texture(materialParams_thicknessMap, uv).r *
-                            materialParams_thicknessScale;
+                            materialParams_thicknessScale + materialParams_thicknessBias;
 
-                    material.baseColor = vec4(baseColor.rgb, 1.0);
+                    ao = remapAo(ao, materialParams.aoMin, materialParams.aoMax);
+                    ao = mix(1.0, ao, saturate(materialParams.aoScale));
+
+                    material.baseColor = vec4(baseColor.rgb * materialParams.baseColorTint, 1.0);
                     material.ambientOcclusion = ao;
-                    material.roughness = roughness;
-                    material.metallic = 0.0;
-                    material.reflectance = mix(0.35, 0.75, specular);
-                    material.thickness = thickness;
+                    material.roughness = clamp(roughness * materialParams.roughnessScale, 0.045, 1.0);
+                    material.metallic = saturate(materialParams.metallic);
+                    material.reflectance = saturate(mix(materialParams.reflectance,
+                            mix(0.35, 0.75, specular), 0.5));
+                    material.thickness = saturate(thickness);
                     material.skinMask = 1.0;
                     material.skinScatterDistance = materialParams_skinScatterDistance;
                     material.skinScatterStrength = materialParams_skinScatterStrength;
@@ -436,13 +473,40 @@ int main(int argc, char** argv) {
         if (ImGui::SliderFloat("Thickness Scale", &g_app.thicknessScale, 0.0f, 4.0f)) {
             updateSkinParameters(view);
         }
-        if (ImGui::SliderFloat("Scatter Distance", &g_app.scatterDistance, 0.0f, 3.0f)) {
+        if (ImGui::SliderFloat("Thickness Bias", &g_app.thicknessBias, -1.0f, 1.0f)) {
+            updateSkinParameters(view);
+        }
+        if (ImGui::SliderFloat("Scattering Distance", &g_app.scatteringDistance, 0.0f, 3.0f)) {
             updateSkinParameters(view);
         }
         if (ImGui::SliderFloat("Scatter Strength", &g_app.scatterStrength, 0.0f, 1.0f)) {
             updateSkinParameters(view);
         }
-        if (ImGui::ColorEdit3("Scatter Tint", &g_app.scatterTint.r)) {
+        if (ImGui::ColorEdit3("Subsurface Color", &g_app.subsurfaceColor.r)) {
+            updateSkinParameters(view);
+        }
+        if (ImGui::ColorEdit3("Base Color Tint", &g_app.baseColorTint.r)) {
+            updateSkinParameters(view);
+        }
+        if (ImGui::SliderFloat("AO Min", &g_app.aoMin, 0.0f, 1.0f)) {
+            updateSkinParameters(view);
+        }
+        if (ImGui::SliderFloat("AO Max", &g_app.aoMax, 0.0f, 1.0f)) {
+            updateSkinParameters(view);
+        }
+        if (ImGui::SliderFloat("AO Scale", &g_app.aoScale, 0.0f, 1.0f)) {
+            updateSkinParameters(view);
+        }
+        if (ImGui::SliderFloat("Normal Scale", &g_app.normalScale, 0.0f, 2.0f)) {
+            updateSkinParameters(view);
+        }
+        if (ImGui::SliderFloat("Roughness Scale", &g_app.roughnessScale, 0.1f, 2.0f)) {
+            updateSkinParameters(view);
+        }
+        if (ImGui::SliderFloat("Metallic", &g_app.metallic, 0.0f, 1.0f)) {
+            updateSkinParameters(view);
+        }
+        if (ImGui::SliderFloat("Reflectance", &g_app.reflectance, 0.0f, 1.0f)) {
             updateSkinParameters(view);
         }
 
