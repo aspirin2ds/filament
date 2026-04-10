@@ -1235,6 +1235,7 @@ static Status processShading(MaterialBuilder& builder, const JsonishValue& value
     static const std::unordered_map<std::string_view, MaterialBuilder::Shading> strToEnum {
         { "cloth",              MaterialBuilder::Shading::CLOTH },
         { "lit",                MaterialBuilder::Shading::LIT },
+        { "skin",               MaterialBuilder::Shading::SKIN },
         { "subsurface",         MaterialBuilder::Shading::SUBSURFACE },
         { "unlit",              MaterialBuilder::Shading::UNLIT },
         { "specularGlossiness", MaterialBuilder::Shading::SPECULAR_GLOSSINESS },

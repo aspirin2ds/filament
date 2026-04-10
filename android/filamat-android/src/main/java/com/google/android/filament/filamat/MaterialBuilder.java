@@ -46,6 +46,7 @@ public class MaterialBuilder {
         UNLIT,                  // no lighting applied, emissive possible
         LIT,                    // default, standard lighting
         SUBSURFACE,             // subsurface lighting model
+        SKIN,                   // skin lighting model
         CLOTH,                  // cloth lighting model
         SPECULAR_GLOSSINESS     // legacy lighting model
     }

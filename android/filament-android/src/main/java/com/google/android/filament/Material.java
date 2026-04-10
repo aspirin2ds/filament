@@ -92,6 +92,11 @@ public class Material {
         SUBSURFACE,
 
         /**
+         * Skin lighting model
+         */
+        SKIN,
+
+        /**
          * Cloth lighting model
          *
          * @see

@@ -409,6 +409,7 @@ const char* toString(Shading shadingModel) noexcept {
         case Shading::UNLIT: return "unlit";
         case Shading::LIT: return "lit";
         case Shading::SUBSURFACE: return "subsurface";
+        case Shading::SKIN: return "skin";
         case Shading::CLOTH: return "cloth";
         case Shading::SPECULAR_GLOSSINESS: return "specularGlossiness";
     }

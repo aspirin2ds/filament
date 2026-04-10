@@ -61,7 +61,7 @@ feature_flag = identifier , equals , ("unsupported" | "required" | "optional") ;
 blending = "BlendingMode" , equals ,
     ( "opaque" | "transparent" | "fade" | "add" | "masked" | "multiply" | "screen" ) ;
 shading = "ShadingModel"  , equals ,
-    ( "lit" | "subsurface" | "cloth" | "unlit" | "specularGlossiness") ;
+    ( "lit" | "subsurface" | "skin" | "cloth" | "unlit" | "specularGlossiness") ;
 equals = [ whitespace ] , "=" , [ whitespace ] ;
 any = ? any character other than newline ? ;
 whitespace = ? sequence of tabs and spaces ? ;

@@ -601,6 +601,40 @@ TEST_F(MaterialCompiler, StaticCodeAnalyzerSubsurfaceColor) {
     EXPECT_TRUE(PropertyListsMatch(expected, properties));
 }
 
+TEST_F(MaterialCompiler, SkinShaderDefinesSkinModel) {
+    std::string fragmentCode(R"(
+        void material(inout MaterialInputs material) {
+            prepareMaterial(material);
+            material.baseColor = vec4(1.0);
+            material.thickness = 0.5;
+        }
+    )");
+
+    std::string shaderCode = shaderWithAllProperties(*jobSystem, ShaderStage::FRAGMENT, fragmentCode,
+            "", filamat::MaterialBuilder::Shading::SKIN);
+
+    EXPECT_NE(shaderCode.find("SHADING_MODEL_SKIN"), std::string::npos);
+}
+
+TEST_F(MaterialCompiler, StaticCodeAnalyzerSkinThickness) {
+    std::string fragmentCode(R"(
+        void material(inout MaterialInputs material) {
+            prepareMaterial(material);
+            material.thickness = 0.8;
+        }
+    )");
+
+    std::string shaderCode = shaderWithAllProperties(*jobSystem, ShaderStage::FRAGMENT, fragmentCode,
+            "", filamat::MaterialBuilder::Shading::SKIN);
+
+    GLSLTools glslTools;
+    MaterialBuilder::PropertyList properties{ false };
+    glslTools.findProperties(ShaderStage::FRAGMENT, shaderCode, properties);
+    MaterialBuilder::PropertyList expected{ false };
+    expected[size_t(filamat::MaterialBuilder::Property::THICKNESS)] = true;
+    EXPECT_TRUE(PropertyListsMatch(expected, properties));
+}
+
 TEST_F(MaterialCompiler, StaticCodeAnalyzerAnisotropicDirection) {
     std::string fragmentCode(R"(
         void material(inout MaterialInputs material) {
@@ -827,6 +861,44 @@ TEST_F(MaterialCompiler, Arrays) {
     builder.parameter("f4", 1, UniformType::FLOAT4);
     builder.parameter("f1", 1, UniformType::FLOAT);
 
+    filamat::Package result = builder.build(*jobSystem);
+    EXPECT_TRUE(result.isValid());
+}
+
+TEST_F(MaterialCompiler, SkinMaterialCompiles) {
+    std::string shaderCode(R"(
+        void material(inout MaterialInputs material) {
+            prepareMaterial(material);
+            material.baseColor = vec4(1.0, 0.72, 0.68, 1.0);
+            material.thickness = 0.5;
+        }
+    )");
+
+    filamat::MaterialBuilder builder;
+    builder.material(shaderCode.c_str());
+    builder.shading(filamat::MaterialBuilder::Shading::SKIN);
+    builder.name("SkinCompileTest");
+    filamat::Package result = builder.build(*jobSystem);
+    EXPECT_TRUE(result.isValid());
+}
+
+TEST_F(MaterialCompiler, SkinMaterialInputsCompile) {
+    std::string shaderCode(R"(
+        void material(inout MaterialInputs material) {
+            prepareMaterial(material);
+            material.baseColor.rgb = vec3(1.0, 0.72, 0.68);
+            material.thickness = 0.5;
+            material.skinMask = 1.0;
+            material.skinScatterDistance = 1.2;
+            material.skinScatterStrength = 0.85;
+            material.skinScatterTint = vec3(1.0, 0.45, 0.38);
+        }
+    )");
+
+    filamat::MaterialBuilder builder;
+    builder.material(shaderCode.c_str());
+    builder.shading(filamat::MaterialBuilder::Shading::SKIN);
+    builder.name("SkinInputsTest");
     filamat::Package result = builder.build(*jobSystem);
     EXPECT_TRUE(result.isValid());
 }

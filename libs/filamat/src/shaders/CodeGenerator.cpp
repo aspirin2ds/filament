@@ -235,6 +235,7 @@ utils::io::sstream& CodeGenerator::generateCommonProlog(utils::io::sstream& out,
             case Shading::LIT:                 return "SHADING_MODEL_LIT";
             case Shading::UNLIT:               return "SHADING_MODEL_UNLIT";
             case Shading::SUBSURFACE:          return "SHADING_MODEL_SUBSURFACE";
+            case Shading::SKIN:                return "SHADING_MODEL_SKIN";
             case Shading::CLOTH:               return "SHADING_MODEL_CLOTH";
             case Shading::SPECULAR_GLOSSINESS: return "SHADING_MODEL_SPECULAR_GLOSSINESS";
         }
@@ -1098,8 +1099,9 @@ io::sstream& CodeGenerator::generateSurfaceLit(io::sstream& out, ShaderStage sta
                     out << SHADERS_SURFACE_SHADING_MODEL_STANDARD_FS_DATA;
                 }
                 break;
+            case Shading::SKIN:
             case Shading::SUBSURFACE:
-                out << SHADERS_SURFACE_SHADING_MODEL_SUBSURFACE_FS_DATA;
+                out << SHADERS_SURFACE_SHADING_MODEL_STANDARD_FS_DATA;
                 break;
             case Shading::CLOTH:
                 out << SHADERS_SURFACE_SHADING_MODEL_CLOTH_FS_DATA;

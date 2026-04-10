@@ -34,12 +34,19 @@ struct MaterialInputs {
     float anisotropy;
     vec3  anisotropyDirection;
 
-#if defined(SHADING_MODEL_SUBSURFACE) || defined(MATERIAL_HAS_REFRACTION)
+#if defined(SHADING_MODEL_SUBSURFACE) || defined(SHADING_MODEL_SKIN) || defined(MATERIAL_HAS_REFRACTION)
     float thickness;
 #endif
 #if defined(SHADING_MODEL_SUBSURFACE)
     float subsurfacePower;
     vec3  subsurfaceColor;
+#endif
+
+#if defined(SHADING_MODEL_SKIN)
+    float skinMask;
+    float skinScatterDistance;
+    float skinScatterStrength;
+    vec3  skinScatterTint;
 #endif
 
 #if defined(SHADING_MODEL_CLOTH)
@@ -142,12 +149,19 @@ void initMaterial(out MaterialInputs material) {
     material.anisotropyDirection = vec3(1.0, 0.0, 0.0);
 #endif
 
-#if defined(SHADING_MODEL_SUBSURFACE) || defined(MATERIAL_HAS_REFRACTION)
+#if defined(SHADING_MODEL_SUBSURFACE) || defined(SHADING_MODEL_SKIN) || defined(MATERIAL_HAS_REFRACTION)
     material.thickness = 0.5;
 #endif
 #if defined(SHADING_MODEL_SUBSURFACE)
     material.subsurfacePower = 12.234;
     material.subsurfaceColor = vec3(1.0);
+#endif
+
+#if defined(SHADING_MODEL_SKIN)
+    material.skinMask = 1.0;
+    material.skinScatterDistance = 1.0;
+    material.skinScatterStrength = 1.0;
+    material.skinScatterTint = vec3(1.0);
 #endif
 
 #if defined(SHADING_MODEL_CLOTH)

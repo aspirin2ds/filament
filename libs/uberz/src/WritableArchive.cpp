@@ -93,6 +93,8 @@ static string_view readShadingModel(string_view cursor, Shading* shading) {
         *shading = Shading::LIT;
     } else if (sz = readPrefix("subsurface"sv, cursor); sz > 0) {
         *shading = Shading::SUBSURFACE;
+    } else if (sz = readPrefix("skin"sv, cursor); sz > 0) {
+        *shading = Shading::SKIN;
     } else if (sz = readPrefix("cloth"sv, cursor); sz > 0) {
         *shading = Shading::CLOTH;
     } else if (sz = readPrefix("specularGlossiness"sv, cursor); sz > 0) {
