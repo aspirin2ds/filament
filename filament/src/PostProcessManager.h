@@ -175,6 +175,10 @@ public:
             math::float2 bokehScale,
             const DepthOfFieldOptions& dofOptions) noexcept;
 
+    FrameGraphId<FrameGraphTexture> skinSSS(FrameGraph& fg,
+            FrameGraphId<FrameGraphTexture> input,
+            SkinSSSOptions const& options) noexcept;
+
     // Bloom
     struct BloomPassOutput {
         FrameGraphId<FrameGraphTexture> bloom;

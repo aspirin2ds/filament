@@ -33,6 +33,7 @@
 #include "materials/flare/flare.h"
 #include "materials/fog/fog.h"
 #include "materials/fsr/fsr.h"
+#include "materials/skinSSS/skinSSS.h"
 #include "materials/sgsr/sgsr.h"
 #include "materials/ssao/ssao.h"
 
@@ -385,6 +386,9 @@ void PostProcessManager::init() noexcept {
             registerPostProcessMaterial(info.name, info);
         }
         for (auto const& info: getFsrMaterialList()) {
+            registerPostProcessMaterial(info.name, info);
+        }
+        for (auto const& info: getSkinSSSMaterialList()) {
             registerPostProcessMaterial(info.name, info);
         }
         for (auto const& info: getSgsrMaterialList()) {
@@ -1436,6 +1440,56 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::gaussianBlurPass(FrameGraph&
             });
 
     return blurPass->out;
+}
+
+FrameGraphId<FrameGraphTexture> PostProcessManager::skinSSS(FrameGraph& fg,
+        FrameGraphId<FrameGraphTexture> input,
+        SkinSSSOptions const& options) noexcept {
+    if (!options.enabled || options.quality == SkinSSSOptions::Quality::OFF ||
+            options.strength <= 0.0f) {
+        return input;
+    }
+
+    struct CompositePassData {
+        FrameGraphId<FrameGraphTexture> source;
+        FrameGraphId<FrameGraphTexture> blurred;
+        FrameGraphId<FrameGraphTexture> out;
+    };
+
+    float const scale = clamp(options.scale, 0.25f, 4.0f);
+    size_t const kernelWidth = options.quality == SkinSSSOptions::Quality::CHEAP ? 9u : 17u;
+    float const sigma = (options.quality == SkinSSSOptions::Quality::CHEAP ? 2.0f : 3.5f) * scale;
+    auto blurred = gaussianBlurPass(fg, input, {}, false, kernelWidth, sigma);
+
+    auto const& compositePass = fg.addPass<CompositePassData>("Skin SSS Composite Pass",
+            [&](FrameGraph::Builder& builder, auto& data) {
+                auto const sourceDesc = builder.getDescriptor(input);
+                data.source = builder.sample(input);
+                data.blurred = builder.sample(blurred);
+                data.out = builder.createTexture("Skin SSS Output", sourceDesc);
+                data.out = builder.declareRenderPass(data.out);
+            },
+            [=, this](FrameGraphResources const& resources, auto const& data, DriverApi& driver) {
+                bindPostProcessDescriptorSet(driver);
+                bindPerRenderableDescriptorSet(driver);
+
+                auto const& material = getPostProcessMaterial("skinSSSComposite");
+                auto* const mi = getMaterialInstance(mEngine, driver, material);
+                mi->setParameter("source", resources.getTexture(data.source), SamplerParams{
+                        .filterMag = SamplerMagFilter::LINEAR,
+                        .filterMin = SamplerMinFilter::LINEAR
+                });
+                mi->setParameter("blurred", resources.getTexture(data.blurred), SamplerParams{
+                        .filterMag = SamplerMagFilter::LINEAR,
+                        .filterMin = SamplerMinFilter::LINEAR
+                });
+                mi->setParameter("strength", clamp(options.strength, 0.0f, 1.0f));
+
+                commitAndRenderFullScreenQuad(driver, resources.getRenderPassInfo(), mi);
+                unbindAllDescriptorSets(driver);
+            });
+
+    return compositePass->out;
 }
 
 PostProcessManager::ScreenSpaceRefConfig PostProcessManager::prepareMipmapSSR(FrameGraph& fg,

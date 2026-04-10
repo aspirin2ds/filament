@@ -60,6 +60,7 @@ set(SRCS
         src/materials/flare/flare.cpp
         src/materials/fog/fog.cpp
         src/materials/fsr/fsr.cpp
+        src/materials/skinSSS/skinSSS.cpp
         src/materials/sgsr/sgsr.cpp
         src/materials/ssao/ssao.cpp
         src/AtlasAllocator.cpp
@@ -295,6 +296,7 @@ set(MATERIAL_SRCS
         src/materials/fsr/fsr_easu_mobile.mat
         src/materials/fsr/fsr_easu_mobileF.mat
         src/materials/fsr/fsr_rcas.mat
+        src/materials/skinSSS/skinSSSComposite.mat
         src/materials/sgsr/sgsr1.mat
         src/materials/resolveDepth.mat
         src/materials/separableGaussianBlur.mat

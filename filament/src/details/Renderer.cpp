@@ -708,6 +708,9 @@ void FRenderer::renderJob(DriverApi& driver, RootArenaScope& rootArenaScope, FVi
     bool hasColorGrading = hasPostProcess;
     bool hasDithering = view.getDithering() == Dithering::TEMPORAL;
     bool hasFXAA = view.getAntiAliasing() == AntiAliasing::FXAA;
+    auto skinSSSOptions = view.getSkinSSSOptions();
+    bool const hasSkinSSS = skinSSSOptions.enabled &&
+            skinSSSOptions.quality != FView::SkinSSSOptions::Quality::OFF;
     float2 scale = view.updateScale(engine, mFrameInfoManager.getLastFrameInfo(), mFrameRateOptions, mDisplayInfo);
     auto msaaOptions = view.getMultiSampleAntiAliasingOptions();
     auto dsrOptions = view.getDynamicResolutionOptions();
@@ -721,6 +724,7 @@ void FRenderer::renderJob(DriverApi& driver, RootArenaScope& rootArenaScope, FVi
     auto guardBandOptions = view.getGuardBandOptions();
     const bool isRenderingMultiview = view.hasStereo() &&
             engine.getConfig().stereoscopicType == StereoscopicType::MULTIVIEW;
+    hasPostProcess = hasPostProcess || hasSkinSSS;
     // FIXME: This is to override some settings that are not supported for multiview at the moment.
     // Remove this when all features are supported.
     if (isRenderingMultiview) {
@@ -1413,6 +1417,10 @@ void FRenderer::renderJob(DriverApi& driver, RootArenaScope& rootArenaScope, FVi
             xvp.width  *= taaOptions.upscaling;
             xvp.height *= taaOptions.upscaling;
         }
+    }
+
+    if (hasSkinSSS) {
+        input = ppm.skinSSS(fg, input, skinSSSOptions);
     }
 
     // --------------------------------------------------------------------------------------------
