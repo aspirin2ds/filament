@@ -199,6 +199,19 @@ struct BloomOptions {
     float haloThreshold = 10.0f;
 };
 
+struct SkinSSSOptions {
+    enum class Quality : uint8_t {
+        OFF,
+        CHEAP,
+        FULL
+    };
+
+    bool enabled = false;
+    Quality quality = Quality::OFF;
+    float strength = 1.0f;
+    float scale = 1.0f;
+};
+
 /**
  * Options to control large-scale fog in the scene. Materials can enable the <code>linearFog</code> property,
  * which uses a simplified, linear equation for fog calculation; in this mode, the heightFalloff

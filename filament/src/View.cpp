@@ -278,6 +278,14 @@ View::BloomOptions View::getBloomOptions() const noexcept {
     return downcast(this)->getBloomOptions();
 }
 
+void View::setSkinSSSOptions(SkinSSSOptions options) noexcept {
+    downcast(this)->setSkinSSSOptions(options);
+}
+
+View::SkinSSSOptions View::getSkinSSSOptions() const noexcept {
+    return downcast(this)->getSkinSSSOptions();
+}
+
 void View::setFogOptions(FogOptions options) noexcept {
     downcast(this)->setFogOptions(options);
 }

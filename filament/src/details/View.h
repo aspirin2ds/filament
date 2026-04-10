@@ -403,6 +403,12 @@ public:
         return mBloomOptions;
     }
 
+    void setSkinSSSOptions(SkinSSSOptions options) noexcept;
+
+    SkinSSSOptions getSkinSSSOptions() const noexcept {
+        return mSkinSSSOptions;
+    }
+
     void setFogOptions(FogOptions options) noexcept;
 
     FogOptions getFogOptions() const noexcept {
@@ -612,6 +618,7 @@ private:
     VsmShadowOptions mVsmShadowOptions; // FIXME: this should probably be per-light
     SoftShadowOptions mSoftShadowOptions;
     BloomOptions mBloomOptions;
+    SkinSSSOptions mSkinSSSOptions;
     FogOptions mFogOptions;
     DepthOfFieldOptions mDepthOfFieldOptions;
     VignetteOptions mVignetteOptions;

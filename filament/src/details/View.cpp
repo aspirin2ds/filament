@@ -1615,6 +1615,15 @@ void FView::setBloomOptions(BloomOptions options) noexcept {
     mBloomOptions = options;
 }
 
+void FView::setSkinSSSOptions(SkinSSSOptions options) noexcept {
+    options.strength = saturate(options.strength);
+    options.scale = std::max(0.0f, options.scale);
+    if (!options.enabled) {
+        options.quality = SkinSSSOptions::Quality::OFF;
+    }
+    mSkinSSSOptions = options;
+}
+
 void FView::setFogOptions(FogOptions options) noexcept {
     options.distance = std::max(0.0f, options.distance);
     options.maximumOpacity = clamp(options.maximumOpacity, 0.0f, 1.0f);

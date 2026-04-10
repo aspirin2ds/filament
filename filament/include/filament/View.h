@@ -79,6 +79,7 @@ public:
 
     using DynamicResolutionOptions = filament::DynamicResolutionOptions;
     using BloomOptions = filament::BloomOptions;
+    using SkinSSSOptions = filament::SkinSSSOptions;
     using FogOptions = filament::FogOptions;
     using DepthOfFieldOptions = filament::DepthOfFieldOptions;
     using VignetteOptions = filament::VignetteOptions;
@@ -474,6 +475,20 @@ public:
      * @return the current bloom options for this view.
      */
     BloomOptions getBloomOptions() const noexcept;
+
+    /**
+     * Enables or disables skin subsurface scattering in the post-processing stage.
+     *
+     * @param options options
+     */
+    void setSkinSSSOptions(SkinSSSOptions options) noexcept;
+
+    /**
+     * Queries the skin subsurface scattering options.
+     *
+     * @return the current skin subsurface scattering options for this view.
+     */
+    SkinSSSOptions getSkinSSSOptions() const noexcept;
 
     /**
      * Enables or disables fog. Disabled by default.
