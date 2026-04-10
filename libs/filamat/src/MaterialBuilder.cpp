@@ -1288,8 +1288,8 @@ error:
 
     // TODO: maybe check MaterialDomain::COMPUTE has outputs
 
-    if (mCustomSurfaceShading && mShading != Shading::LIT) {
-        LOG(ERROR) << "Error: customSurfaceShading can only be used with lit materials.";
+    if (mCustomSurfaceShading && mShading != Shading::LIT && mShading != Shading::SUBSURFACE_BURLEY) {
+        LOG(ERROR) << "Error: customSurfaceShading can only be used with lit or subsurfaceBurley materials.";
         goto error;
     }
 

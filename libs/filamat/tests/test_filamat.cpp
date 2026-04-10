@@ -831,12 +831,32 @@ TEST_F(MaterialCompiler, Arrays) {
     EXPECT_TRUE(result.isValid());
 }
 
-TEST_F(MaterialCompiler, CustomSurfaceShadingRequiresLit) {
+TEST_F(MaterialCompiler, CustomSurfaceShadingRequiresLitOrSubsurfaceBurley) {
     filamat::MaterialBuilder builder;
     builder.customSurfaceShading(true);
     builder.shading(filament::Shading::UNLIT);
     filamat::Package result = builder.build(*jobSystem);
     EXPECT_FALSE(result.isValid());
+
+    filamat::MaterialBuilder burleyBuilder;
+    burleyBuilder.customSurfaceShading(true);
+    burleyBuilder.shading(filament::Shading::SUBSURFACE_BURLEY);
+    burleyBuilder.material(R"(
+        void material(inout MaterialInputs material) {
+            prepareMaterial(material);
+            material.subsurfaceColor = vec3(1.0);
+        }
+
+        vec3 surfaceShading(
+                const MaterialInputs materialInputs,
+                const ShadingData shadingData,
+                const LightData lightData
+        ) {
+            return vec3(1.0);
+        }
+    )");
+    filamat::Package burleyResult = burleyBuilder.build(*jobSystem);
+    EXPECT_TRUE(burleyResult.isValid());
 }
 
 TEST_F(MaterialCompiler, CustomSurfaceShadingRequiresFunction) {

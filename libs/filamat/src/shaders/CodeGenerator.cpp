@@ -1186,7 +1186,11 @@ io::sstream& CodeGenerator::generateSurfaceLit(io::sstream& out, ShaderStage sta
                 out << SHADERS_SURFACE_SHADING_MODEL_SUBSURFACE_FS_DATA;
                 break;
             case Shading::SUBSURFACE_BURLEY:
-                out << SHADERS_SURFACE_SHADING_MODEL_SUBSURFACE_BURLEY_FS_DATA;
+                if (customSurfaceShading) {
+                    out << SHADERS_SURFACE_SHADING_LIT_CUSTOM_FS_DATA;
+                } else {
+                    out << SHADERS_SURFACE_SHADING_MODEL_SUBSURFACE_BURLEY_FS_DATA;
+                }
                 break;
             case Shading::CLOTH:
                 out << SHADERS_SURFACE_SHADING_MODEL_CLOTH_FS_DATA;
