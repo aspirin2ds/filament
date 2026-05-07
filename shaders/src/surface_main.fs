@@ -1,7 +1,9 @@
-#if __VERSION__ == 100
-vec4 fragColor;
-#else
+#if !defined(HAS_CUSTOM_OUTPUT)
 layout(location = 0) out vec4 fragColor;
+#else
+// Define fragColor even with custom outputs enabled to satisfy usages. It will be removed
+// during dead-code elimination.
+vec4 fragColor;
 #endif
 
 #if defined(SHADING_MODEL_SUBSURFACE_BURLEY)
@@ -148,7 +150,8 @@ void main() {
     }
 #endif
 
-#if __VERSION__ == 100
-    gl_FragData[0] = fragColor;
+
+#if defined(HAS_CUSTOM_OUTPUT)
+    FRAG_OUTPUT_AT0 = inputs.FRAG_OUTPUT0;
 #endif
 }

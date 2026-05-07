@@ -74,11 +74,25 @@ public:
         return mManager.getEntities();
     }
 
+    const utils::PagedArenaBitset& getEntityBitset() const noexcept {
+        return mManager.getEntityBitset();
+    }
+
     void create(const Builder& builder, utils::Entity entity);
 
     void destroy(utils::Entity e) noexcept;
 
     void prepare(backend::DriverApi& driver) const noexcept;
+
+    void registerChangeCallback(void const* token, utils::SingleInstanceComponentManagerBase::ChangeCallback callback) noexcept {
+        mManager.registerChangeCallback(token, std::move(callback));
+    }
+    void unregisterChangeCallback(void const* token) noexcept {
+        mManager.unregisterChangeCallback(token);
+    }
+    void flushNotifications() noexcept {
+        mManager.flushNotifications();
+    }
 
     struct LightType {
         Type type : 3;

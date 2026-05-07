@@ -64,7 +64,9 @@ protected:
     }
 };
 
-TEST_F(CommandBufferQueueTest, BasicProduceConsume) {
+// Test disabled because it violates CommandBufferQueue internal invariant that all writes must be
+// aligned on FILAMENT_OBJECT_ALIGNMENT
+TEST_F(CommandBufferQueueTest, DISABLED_BasicProduceConsume) {
     // Test with a standard, valid configuration.
     CommandBufferQueue queue(1024, 4096, false);
     std::atomic<bool> consumerFinished = false;
@@ -88,7 +90,9 @@ TEST_F(CommandBufferQueueTest, BasicProduceConsume) {
     EXPECT_TRUE(consumerFinished);
 }
 
-TEST_F(CommandBufferQueueTest, MultipleFlushes) {
+// Test disabled because it violates CommandBufferQueue internal invariant that all writes must be
+// aligned on FILAMENT_OBJECT_ALIGNMENT
+TEST_F(CommandBufferQueueTest, DISABLED_MultipleFlushes) {
     // Test with a standard, valid configuration.
     CommandBufferQueue queue(1024, 4096, false);
     std::atomic<int> buffersProcessed = 0;
@@ -215,7 +219,9 @@ TEST_F(CommandBufferQueueTest, Backpressure) {
     queue.releaseBuffer(buffers[1]);
 }
 
-TEST_F(CommandBufferQueueTest, Pause) {
+// Test disabled because it violates CommandBufferQueue internal invariant that all writes must be
+// aligned on FILAMENT_OBJECT_ALIGNMENT
+TEST_F(CommandBufferQueueTest, DISABLED_Pause) {
     const size_t blockSize = CircularBuffer::getBlockSize();
     CommandBufferQueue queue(blockSize, blockSize*2, false);
 
@@ -249,7 +255,9 @@ TEST_F(CommandBufferQueueTest, Pause) {
     EXPECT_TRUE(consumerGotBuffers);
 }
 
-TEST_F(CommandBufferQueueTest, StressTest) {
+// Test disabled because it violates CommandBufferQueue internal invariant that all writes must be
+// aligned on FILAMENT_OBJECT_ALIGNMENT
+TEST_F(CommandBufferQueueTest, DISABLED_StressTest) {
     const size_t bufferSize = 1 * 1024 * 1024; // 1 MB
     const size_t requiredSize = 256 * 1024;    // 256 KB
     CommandBufferQueue queue(requiredSize, bufferSize, false);
@@ -303,4 +311,37 @@ TEST_F(CommandBufferQueueTest, StressTest) {
 }
 
 
+#ifdef __EXCEPTIONS
+TEST_F(CommandBufferQueueTest, BackendExceptionHandling) {
+    CommandBufferQueue queue(1024, 4096, false);
+    
+    // Simulate an exception in the backend thread
+    std::thread backend([&]() {
+        try {
+            std::this_thread::sleep_for(10ms);
+            throw std::runtime_error("Artificial Backend Failure");
+        } catch (...) {
+            queue.setUnrecoverableException(std::current_exception());
+        }
+
+    });
+
+    // Wait for backend to fail
+    std::this_thread::sleep_for(50ms);
+    
+    // First call to flush should throw the original exception
+    EXPECT_THROW({
+        queue.flush();
+    }, std::runtime_error);
+
+    // Subsequent calls should throw due to postcondition check
+    EXPECT_THROW({
+        queue.flush();
+    }, utils::Panic);
+    
+    backend.join();
+}
+#endif
+
 } // namespace filament::backend
+

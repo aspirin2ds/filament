@@ -814,9 +814,8 @@ void VulkanDriver::destroyTexture(Handle<HwTexture> th) {
         return;
     }
     auto texture = resource_ptr<VulkanTexture>::cast(&mResourceManager, th);
-    texture.dec();
-
     mExternalImageManager.removeExternallySampledTexture(texture);
+    texture.dec();
 }
 
 void VulkanDriver::createProgramR(Handle<HwProgram> ph, Program&& program, utils::ImmutableCString&& tag) {
@@ -944,28 +943,23 @@ void VulkanDriver::createRenderTargetR(Handle<HwRenderTarget> rth,
         }
     }
 
-    VulkanAttachment depthStencil[2] = {};
-    if (depth.handle) {
-        depthStencil[0] = {
-            .texture = resource_ptr<VulkanTexture>::cast(&mResourceManager, depth.handle),
-            .level = depth.level,
-            .layerCount = layerCount,
-            .layer = (uint8_t) depth.layer,
-        };
-        UTILS_UNUSED_IN_RELEASE VkExtent2D extent = depthStencil[0].getExtent2D();
-        tmin = { std::min(tmin.x, extent.width), std::min(tmin.y, extent.height) };
-        tmax = { std::max(tmax.x, extent.width), std::max(tmax.y, extent.height) };
-        attachmentCount++;
-    }
+    VulkanAttachment depthStencil;
+    // In VK you can only have one depth/stencil attachment on a RT.
+    // This can be a depth only, stencil only or depth and stencil combined.
+    // You cannot have separate depth and stencil attachment (unless you use Dynamic Rendering)
+    if (depth.handle || stencil.handle) {
+        assert_invariant(!depth.handle || !stencil.handle || (depth.handle == stencil.handle));
+        // We assume that we have depth only attachment or that depth and stencil come in the depth attachment
+        // Except in the case there is a stencil only attachment
+        TargetBufferInfo depthStencilBuffer = depth.handle ? depth : stencil;
 
-    if (stencil.handle) {
-        depthStencil[1] = {
-            .texture = resource_ptr<VulkanTexture>::cast(&mResourceManager, stencil.handle),
-            .level = stencil.level,
+        depthStencil = {
+            .texture = resource_ptr<VulkanTexture>::cast(&mResourceManager, depthStencilBuffer.handle),
+            .level = depthStencilBuffer.level,
             .layerCount = layerCount,
-            .layer = (uint8_t) stencil.layer,
+            .layer = (uint8_t) depthStencilBuffer.layer,
         };
-        UTILS_UNUSED_IN_RELEASE VkExtent2D extent = depthStencil[1].getExtent2D();
+        UTILS_UNUSED_IN_RELEASE VkExtent2D extent = depthStencil.getExtent2D();
         tmin = { std::min(tmin.x, extent.width), std::min(tmin.y, extent.height) };
         tmax = { std::max(tmax.x, extent.width), std::max(tmax.y, extent.height) };
         attachmentCount++;
@@ -1008,7 +1002,9 @@ void VulkanDriver::createFenceR(Handle<HwFence> fh, utils::ImmutableCString&& ta
     // it with appropriate VulkanCmdFence, which is associated with the current, recording command
     // buffer.
     auto fence = resource_ptr<VulkanFence>::cast(&mResourceManager, fh);
-    fence->setFence(cmdbuf->getFenceStatus());
+    signalFence([&] {
+        fence->setFence(cmdbuf->getFenceStatus());
+    });
     mResourceManager.associateHandle(fh.getId(), std::move(tag));
 }
 
@@ -1459,7 +1455,9 @@ void VulkanDriver::fenceCancel(FenceHandle const fh) {
     // Even though this is a synchronous call, the fence handle must be (and stay) valid
     assert_invariant(fh);
     auto fence = resource_ptr<VulkanFence>::cast(&mResourceManager, fh);
-    fence->cancel();
+    signalFence([&] {
+        fence->cancel();
+    });
 }
 
 FenceStatus VulkanDriver::getFenceStatus(Handle<HwFence> const fh) {
@@ -1486,7 +1484,22 @@ FenceStatus VulkanDriver::fenceWait(FenceHandle const fh, uint64_t const timeout
         until = now + nanoseconds(timeout);
     }
 
-    auto const [cmdfence, canceled] = fence->wait(until);
+    std::shared_ptr<VulkanCmdFence> cmdfence;
+    bool canceled = false;
+    FenceStatus status = waitForFence([&] {
+        auto fstatus = fence->getStatus();
+        if (bool(fstatus.first) || fstatus.second) {
+            cmdfence = fstatus.first;
+            canceled = fstatus.second;
+            return true;
+        }
+        return false;
+    }, until);
+
+    if (status == FenceStatus::ERROR) {
+        return FenceStatus::ERROR;
+    }
+
     if (!cmdfence || canceled) {
         return canceled ? FenceStatus::ERROR : FenceStatus::TIMEOUT_EXPIRED;
     }
@@ -1932,9 +1945,15 @@ void VulkanDriver::beginRenderPass(Handle<HwRenderTarget> rth, const RenderPassP
         fvkmemory::resource_ptr<VulkanSwapChain> sc = mCurrentSwapChain;
         assert_invariant(sc);
         if (sc->isFirstRenderPass()) {
-            discardStart |= TargetBufferFlags::COLOR;
-            sc->markFirstRenderPass();
-            acquireNextSwapchainImage();
+            if (!acquireNextSwapchainImage()) {
+                // We've failed to acquire the next image. Subsequent calls cannot assume the render
+                // pass exists.
+                mCurrentRenderPass = {};
+                return;
+            } else {
+                discardStart |= TargetBufferFlags::COLOR;
+                sc->markFirstRenderPass();
+            }
         }
     }
 
@@ -1950,9 +1969,9 @@ void VulkanDriver::beginRenderPass(Handle<HwRenderTarget> rth, const RenderPassP
     assert_invariant(rt == mDefaultRenderTarget || extent.width > 0 && extent.height > 0);
 
 #if FVK_ENABLED(FVK_DEBUG_TEXTURE)
-    if (rt->hasDepth()) {
-        auto depth = rt->getDepth();
-        depth.texture->print();
+    if (rt->hasDepthStencil()) {
+        auto depthStencil = rt->getDepthStencil();
+        depthStencil.texture->print();
     }
 #endif
 
@@ -1967,15 +1986,19 @@ void VulkanDriver::beginRenderPass(Handle<HwRenderTarget> rth, const RenderPassP
     VkRect2D const scissor{ .offset = { 0, 0 }, .extent = extent };
     vkCmdSetScissor(cmdbuffer, 0, 1, &scissor);
 
-    VulkanLayout currentDepthLayout = VulkanLayout::UNDEFINED;
+    VulkanLayout currentDepthStencilLayout = VulkanLayout::UNDEFINED;
     TargetBufferFlags clearVal = params.flags.clear;
     TargetBufferFlags discardEndVal = params.flags.discardEnd;
-    if (rt->hasDepth()) {
+    if (rt->hasDepthStencil()) {
         if (params.readOnlyDepthStencil & RenderPassParams::READONLY_DEPTH) {
             discardEndVal &= ~TargetBufferFlags::DEPTH;
             clearVal &= ~TargetBufferFlags::DEPTH;
         }
-        currentDepthLayout = VulkanLayout::DEPTH_ATTACHMENT;
+        if (params.readOnlyDepthStencil & RenderPassParams::READONLY_STENCIL) {
+            discardEndVal &= ~TargetBufferFlags::STENCIL;
+            clearVal &= ~TargetBufferFlags::STENCIL;
+        }
+        currentDepthStencilLayout = VulkanLayout::DEPTH_STENCIL_ATTACHMENT;
     }
 
 
@@ -1985,7 +2008,7 @@ void VulkanDriver::beginRenderPass(Handle<HwRenderTarget> rth, const RenderPassP
     rpkey.clear = clearVal;
     rpkey.discardStart = discardStart;
     rpkey.discardEnd = discardEndVal;
-    rpkey.initialDepthLayout = currentDepthLayout;
+    rpkey.initialDepthStencilLayout = currentDepthStencilLayout;
     rpkey.subpassMask = uint8_t(params.subpassMask);
 
     fvkmemory::resource_ptr<VulkanRenderPass> renderPass =
@@ -2051,9 +2074,9 @@ void VulkanDriver::beginRenderPass(Handle<HwRenderTarget> rth, const RenderPassP
                 renderPassInfo.clearValueCount++;
             }
         }
-        if (fbkey.depth) {
+        if (fbkey.depthStencil) {
             VkClearValue &clearValue = clearValues[renderPassInfo.clearValueCount++];
-            clearValue.depthStencil = {(float) params.clearDepth, 0};
+            clearValue.depthStencil = {(float) params.clearDepth, params.clearStencil};
         }
         renderPassInfo.pClearValues = &clearValues[0];
     }
@@ -2083,6 +2106,9 @@ void VulkanDriver::beginRenderPass(Handle<HwRenderTarget> rth, const RenderPassP
 
 void VulkanDriver::endRenderPass(int) {
     FVK_SYSTRACE_SCOPE();
+    if (skipDueToEmptyRenderPass()) {
+        return;
+    }
 
     VkCommandBuffer cmdbuffer = mCurrentRenderPass.commandBuffer->buffer();
     vkCmdEndRenderPass(cmdbuffer);
@@ -2100,6 +2126,10 @@ void VulkanDriver::endRenderPass(int) {
 }
 
 void VulkanDriver::nextSubpass(int) {
+    if (skipDueToEmptyRenderPass()) {
+        return;
+    }
+
     FILAMENT_CHECK_PRECONDITION(mCurrentRenderPass.currentSubpass == 0)
             << "Only two subpasses are currently supported.";
 
@@ -2186,6 +2216,9 @@ void VulkanDriver::commit(Handle<HwSwapChain> sch) {
 
 void VulkanDriver::setPushConstant(backend::ShaderStage stage, uint8_t index,
         backend::PushConstantVariant value) {
+    if (skipDueToEmptyRenderPass()) {
+        return;
+    }
     assert_invariant(mPipelineState.program && "Expect a program when writing to push constants");
     assert_invariant(mCurrentRenderPass.commandBuffer && "Should be called within a renderpass");
     mPipelineState.program->writePushConstant(mCurrentRenderPass.commandBuffer->buffer(),
@@ -2451,6 +2484,10 @@ void VulkanDriver::bindPipeline(PipelineState const& pipelineState) {
 void VulkanDriver::bindPipelineImpl(PipelineState const& pipelineState,
         VkPipelineLayout pipelineLayout, fvkutils::DescriptorSetMask descriptorSetMask) {
     FVK_SYSTRACE_SCOPE();
+    if (skipDueToEmptyRenderPass()) {
+        return;
+    }
+
     auto commands = mCurrentRenderPass.commandBuffer;
     auto vbi = resource_ptr<VulkanVertexBufferInfo>::cast(&mResourceManager,
             pipelineState.vertexBufferInfo);
@@ -2513,6 +2550,9 @@ void VulkanDriver::bindPipelineImpl(PipelineState const& pipelineState,
 
 void VulkanDriver::bindRenderPrimitive(Handle<HwRenderPrimitive> rph) {
     FVK_SYSTRACE_SCOPE();
+    if (skipDueToEmptyRenderPass()) {
+        return;
+    }
 
     VulkanCommandBuffer* commands = mCurrentRenderPass.commandBuffer;
     VkCommandBuffer cmdbuffer = commands->buffer();
@@ -2569,6 +2609,10 @@ void VulkanDriver::bindDescriptorSet(
 
 void VulkanDriver::draw2(uint32_t indexOffset, uint32_t indexCount, uint32_t instanceCount) {
     FVK_SYSTRACE_SCOPE();
+    if (skipDueToEmptyRenderPass()) {
+        return;
+    }
+
     VkCommandBuffer cmdbuffer = mCurrentRenderPass.commandBuffer->buffer();
     auto const& [doBindInDraw, bundle] = mPipelineState.bindInDraw;
 
@@ -2628,6 +2672,10 @@ void VulkanDriver::dispatchCompute(Handle<HwProgram> program, math::uint3 workGr
 }
 
 void VulkanDriver::scissor(Viewport scissorBox) {
+    if (skipDueToEmptyRenderPass()) {
+        return;
+    }
+
     VkCommandBuffer cmdbuffer = mCurrentRenderPass.commandBuffer->buffer();
 
     // TODO: it's a common case that scissor() is called with (0, 0, maxint, maxint)
@@ -2710,23 +2758,31 @@ void VulkanDriver::endCommandRecording() {
     mDescriptorSetCache.resetCachedState();
 }
 
-void VulkanDriver::acquireNextSwapchainImage() {
+bool VulkanDriver::acquireNextSwapchainImage() {
     assert_invariant(mCurrentSwapChain);
     assert_invariant(mDefaultRenderTarget);
 
     // Swapchain has already been bound to the default render target.  We just return.
     if (mDefaultRenderTarget->isSwapchainBound()) {
-        return;
+        // true means that the rendertarget has the right images attached.
+        return true;
     }
 
-    bool resized = false;
-    mCurrentSwapChain->acquire(resized);
-    if (resized) {
+    auto const [acquired, backingChanged] = mCurrentSwapChain->acquire();
+    if (backingChanged) {
         mFramebufferCache.resetFramebuffers();
     }
     // Note that ordering this after the above lines is necessary since we set the swapchain image
     // to the render target in bindSwapChain().
-    mDefaultRenderTarget->bindSwapChain(mCurrentSwapChain);
+
+    if (acquired) {
+        mDefaultRenderTarget->bindSwapChain(mCurrentSwapChain);
+        return true;
+    }
+    mDefaultRenderTarget->releaseSwapchain();
+    // We failed to acquire the next image in the swapchain.  The rendertarget is no longer valid
+    // for use.
+    return false;
 }
 
 // explicit instantiation of the Dispatcher

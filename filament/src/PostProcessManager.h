@@ -53,6 +53,7 @@
 #include <array>
 #include <random>
 #include <string_view>
+#include <optional>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -313,16 +314,19 @@ public:
 
     // Resolves base level of input and outputs a texture from outDesc.
     // outDesc with, height, format and samples will be overridden.
-    FrameGraphId<FrameGraphTexture> resolve(FrameGraph& fg,
-            utils::StaticString outputBufferName, FrameGraphId<FrameGraphTexture> input,
-            FrameGraphTexture::Descriptor outDesc) noexcept;
+    // customPassName is an optional parameter to override the default "resolve" pass name.
+    FrameGraphId<FrameGraphTexture> resolve(FrameGraph& fg, utils::StaticString outputBufferName,
+            FrameGraphId<FrameGraphTexture> input, FrameGraphTexture::Descriptor outDesc,
+            utils::CString customPassName = {}) noexcept;
 
     // Resolves base level of input and outputs a texture from outDesc using a shader instead of
     // driver-implemented API.
     // outDesc with, height, format and samples will be overridden.
+    // customPassName is an optional parameter to override the default "resolveDepthWithShader" pass
+    // name.
     FrameGraphId<FrameGraphTexture> resolveDepthWithShader(FrameGraph& fg,
             utils::StaticString outputBufferName, FrameGraphId<FrameGraphTexture> input,
-            FrameGraphTexture::Descriptor outDesc) noexcept;
+            FrameGraphTexture::Descriptor outDesc, utils::CString customPassName = {}) noexcept;
 
     FrameGraphId<FrameGraphTexture> gaussianBlurPass(FrameGraph& fg,
             FrameGraphId<FrameGraphTexture> input,
@@ -368,13 +372,7 @@ public:
 
         void terminate(FEngine& engine) noexcept;
 
-        FMaterial* getMaterial(FEngine& engine, backend::DriverApi& driver,
-                Variant::type_t variant) const noexcept;
-
-        FMaterial* getMaterial(FEngine& engine, backend::DriverApi& driver,
-                PostProcessVariant variant = PostProcessVariant::OPAQUE) const noexcept {
-                return getMaterial(engine, driver, Variant::type_t(variant));
-        }
+        FMaterial* getMaterial(FEngine& engine) const noexcept;
 
     private:
         void loadMaterial(FEngine& engine) const noexcept;
@@ -401,11 +399,12 @@ public:
 
     void bindPerRenderableDescriptorSet(backend::DriverApi& driver) const noexcept;
 
-    backend::PipelineState getPipelineState(FMaterial const* ma, Variant::type_t variant) const noexcept;
+    backend::PipelineState getPipelineState(FMaterialInstance const* mi,
+            Variant::type_t variant) const noexcept;
 
-    backend::PipelineState getPipelineState(FMaterial const* ma,
-                    PostProcessVariant variant = PostProcessVariant::OPAQUE) const noexcept {
-            return getPipelineState(ma, Variant::type_t(variant));
+    backend::PipelineState getPipelineState(FMaterialInstance const* mi,
+            PostProcessVariant variant = PostProcessVariant::OPAQUE) const noexcept {
+        return getPipelineState(mi, Variant::type_t(variant));
     }
 
     void renderFullScreenQuad(FrameGraphResources::RenderPassInfo const& out,
@@ -435,27 +434,47 @@ public:
 
     void resetForRender();
 
-
     MaterialInstanceManager& getMaterialInstanceManager() noexcept {
             return mMaterialInstanceManager;
-    }
-
-    // Helper to get a MaterialInstance from a FMaterial
-    // This currently just call FMaterial::getDefaultInstance().
-    FMaterialInstance* getMaterialInstance(FMaterial const* ma) {
-        return mMaterialInstanceManager.getMaterialInstance(ma);
-    }
-
-    // Helper to get a MaterialInstance from a PostProcessMaterial.
-    FMaterialInstance* getMaterialInstance(FEngine& engine, backend::DriverApi& driver,
-            PostProcessMaterial const& material, PostProcessVariant variant = PostProcessVariant::OPAQUE) {
-        FMaterial const* ma = material.getMaterial(engine, driver, variant);
-        return getMaterialInstance(ma);
     }
 
     static void unbindAllDescriptorSets(backend::DriverApi& driver) noexcept;
 
 private:
+
+    // Helpers to get MaterialInstances.
+    //
+    // These funcions additionally ensure that the necessary shader programs are compiled via
+    // prepareProgram().
+    FMaterialInstance* getMaterialInstance(backend::DriverApi& driver, FMaterial const* ma,
+            Variant::type_t variant) const;
+
+    FMaterialInstance* getMaterialInstance(backend::DriverApi& driver, FMaterial const* ma,
+            PostProcessVariant variant = PostProcessVariant::OPAQUE) const {
+        return getMaterialInstance(driver, ma, Variant::type_t(variant));
+    }
+
+    FMaterialInstance* getMaterialInstance(FEngine& engine, backend::DriverApi& driver,
+            PostProcessMaterial const& material,
+            PostProcessVariant variant = PostProcessVariant::OPAQUE) const {
+        return getMaterialInstance(driver, material.getMaterial(engine), Variant::type_t(variant));
+    }
+
+    FMaterialInstance* getMaterialInstanceWithTag(backend::DriverApi& driver, FMaterial const* ma,
+            uint32_t tag, Variant::type_t variant) const;
+
+    FMaterialInstance* getMaterialInstanceWithTag(backend::DriverApi& driver, FMaterial const* ma,
+            uint32_t tag, PostProcessVariant variant = PostProcessVariant::OPAQUE) const {
+        return getMaterialInstanceWithTag(driver, ma, tag, Variant::type_t(variant));
+    }
+
+    FMaterialInstance* getMaterialInstanceWithTag(FEngine& engine, backend::DriverApi& driver,
+            PostProcessMaterial const& material, uint32_t tag,
+            PostProcessVariant variant = PostProcessVariant::OPAQUE) const {
+        return getMaterialInstanceWithTag(driver, material.getMaterial(engine), tag,
+                Variant::type_t(variant));
+    }
+
     UboManager* getUboManager() const noexcept;
 
     backend::RenderPrimitiveHandle mFullScreenQuadRph;

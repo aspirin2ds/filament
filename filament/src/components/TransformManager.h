@@ -69,6 +69,10 @@ public:
         return mManager.getEntities();
     }
 
+    const utils::PagedArenaBitset& getEntityBitset() const noexcept {
+        return mManager.getEntityBitset();
+    }
+
     void setAccurateTranslationsEnabled(bool enable) noexcept;
 
     bool isAccurateTranslationsEnabled() const noexcept {
@@ -100,6 +104,16 @@ public:
     void commitLocalTransformTransaction() noexcept;
 
     void gc(utils::EntityManager& em) noexcept;
+
+    void registerChangeCallback(void const* token, utils::SingleInstanceComponentManagerBase::ChangeCallback callback) noexcept {
+        mManager.registerChangeCallback(token, std::move(callback));
+    }
+    void unregisterChangeCallback(void const* token) noexcept {
+        mManager.unregisterChangeCallback(token);
+    }
+    void flushNotifications() noexcept {
+        mManager.flushNotifications();
+    }
 
     utils::Slice<const math::mat4f> getWorldTransforms() const noexcept {
         return mManager.slice<WORLD>();
